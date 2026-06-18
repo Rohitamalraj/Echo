@@ -1,11 +1,14 @@
 'use client'
 
 import { useState } from 'react'
-import { X, TrendingUp, TrendingDown, ArrowLeftRight, Shield, Zap } from 'lucide-react'
+import { X, TrendingUp, TrendingDown, Shield, Zap, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { type ActiveTrade, getPredictorByAddress } from '@/lib/mock-data'
+import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
+import { buildCreateCopyTx, suiClient } from '@/lib/sui-client'
+import { DUSDC_TYPE, parseDusd, PREDICTOR_BPS, BPS_DENOMINATOR } from '@/lib/constants'
 
 interface CopyModalProps {
   trade: ActiveTrade | null
@@ -13,14 +16,19 @@ interface CopyModalProps {
   onOpenChange: (open: boolean) => void
 }
 
-const directionIcon = { UP: TrendingUp, DOWN: TrendingDown, RANGE: ArrowLeftRight }
+const directionIcon = { UP: TrendingUp, DOWN: TrendingDown, RANGE: TrendingUp }
 const directionBadge = { UP: 'bull', DOWN: 'bear', RANGE: 'range' } as const
 const directionLabel = { UP: 'BTC ABOVE', DOWN: 'BTC BELOW', RANGE: 'BTC IN RANGE' }
 const directionColor = { UP: 'text-emerald-400', DOWN: 'text-red-400', RANGE: 'text-indigo-400' }
 
 export function CopyModal({ trade, open, onOpenChange }: CopyModalProps) {
+  const account = useCurrentAccount()
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
+
   const [amount, setAmount] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'posting' | 'success' | 'error'>('idle')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [txDigest, setTxDigest] = useState('')
 
   if (!open || !trade) return null
 
@@ -33,26 +41,89 @@ export function CopyModal({ trade, open, onOpenChange }: CopyModalProps) {
   const yourCut = potentialPayout * 0.85
   const predictorCut = potentialPayout * 0.15
 
-  function handleConfirm() {
-    setConfirmed(true)
-    setTimeout(() => {
-      setConfirmed(false)
-      setAmount('')
-      onOpenChange(false)
-    }, 2000)
+  async function handleConfirm() {
+    if (!account || amountNum <= 0 || !trade) return
+    setStatus('posting')
+    setErrorMsg('')
+
+    try {
+      // Find user's dUSDC coins
+      const coins = await suiClient.getCoins({
+        owner: account.address,
+        coinType: DUSDC_TYPE,
+      })
+
+      if (!coins.data.length) {
+        setErrorMsg('No dUSDC in wallet. Request testnet tokens from the Tally form.')
+        setStatus('error')
+        return
+      }
+
+      // Find user's PredictManager
+      const managers = await suiClient.getOwnedObjects({
+        owner: account.address,
+        filter: {
+          StructType: `0xf5ea2b3749c65d6e56507cc35388719aadb28f9cab873696a2f8687f5c785138::predict_manager::PredictManager`,
+        },
+      })
+
+      if (!managers.data.length) {
+        setErrorMsg('No PredictManager found. Please create one via the Predict protocol first.')
+        setStatus('error')
+        return
+      }
+
+      const amountRaw = parseDusd(amount)
+
+      const tx = buildCreateCopyTx({
+        predictorProfileId: trade.predictorAddress, // in real use: the profile object ID
+        oracleId: trade.oracleId ?? trade.predictorAddress,
+        strike: BigInt(Math.round(trade.strike * 1e9)),
+        isUp: trade.direction === 'UP',
+        expiryMs: BigInt(Date.now() + trade.expiryMinutes * 60_000),
+        amountDusd: amountRaw,
+        managerObjectId: managers.data[0].data!.objectId,
+        dusdCoinObjectId: coins.data[0].coinObjectId,
+      })
+
+      const result = await signAndExecute({ transaction: tx })
+      setTxDigest(result.digest)
+      setStatus('success')
+      setTimeout(() => {
+        setStatus('idle')
+        setAmount('')
+        onOpenChange(false)
+      }, 3000)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setErrorMsg(msg.slice(0, 120))
+      setStatus('error')
+    }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => onOpenChange(false)} />
       <div className="relative z-10 w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl">
-        {confirmed ? (
+        {status === 'success' ? (
           <div className="flex flex-col items-center justify-center gap-4 p-10">
             <div className="flex size-16 items-center justify-center rounded-full bg-emerald-500/20">
               <Zap className="size-8 text-emerald-400" />
             </div>
             <p className="text-center text-lg font-semibold font-heading">Copy Trade Submitted!</p>
-            <p className="text-center text-sm text-muted-foreground">Your position is live on Sui testnet.</p>
+            <p className="text-center text-sm text-muted-foreground">
+              Your position is live on Sui testnet. CopyRecord stored on-chain.
+            </p>
+            {txDigest && (
+              <a
+                href={`https://suiscan.xyz/testnet/tx/${txDigest}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-indigo-400 underline"
+              >
+                View on Suiscan ↗
+              </a>
+            )}
           </div>
         ) : (
           <>
@@ -157,9 +228,21 @@ export function CopyModal({ trade, open, onOpenChange }: CopyModalProps) {
                   </div>
                   <div className="border-t border-border pt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Shield className="size-3" />
-                    Split enforced by Move smart contract. No admin key.
+                    Split enforced by Move smart contract · Package: …{DUSDC_TYPE.slice(-8)}
                   </div>
                 </div>
+              )}
+
+              {!account && (
+                <p className="text-sm text-amber-400 text-center">
+                  Connect wallet to copy this trade
+                </p>
+              )}
+
+              {status === 'error' && (
+                <p className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-sm text-red-400">
+                  {errorMsg || 'Transaction failed. Please try again.'}
+                </p>
               )}
             </div>
 
@@ -168,13 +251,17 @@ export function CopyModal({ trade, open, onOpenChange }: CopyModalProps) {
               <Button
                 className="w-full bg-indigo-600 text-white hover:bg-indigo-500"
                 size="lg"
-                disabled={!amountNum || amountNum <= 0}
+                disabled={!amountNum || amountNum <= 0 || !account || status === 'posting'}
                 onClick={handleConfirm}
               >
-                Confirm Copy Trade
+                {status === 'posting' ? (
+                  <><Loader2 className="size-4 animate-spin mr-2" /> Signing transaction…</>
+                ) : (
+                  'Confirm Copy Trade'
+                )}
               </Button>
               <p className="mt-3 text-center text-xs text-muted-foreground">
-                Transaction will be signed with your Sui wallet
+                Transaction signed with your Sui wallet · CopyRecord stored on-chain
               </p>
             </div>
           </>

@@ -1173,17 +1173,20 @@ Echo is the **social** flavor. It:
 
 ## Appendix A: Key Addresses & IDs (Testnet)
 
-*(To be filled during deployment)*
+*(Deployed June 2026 — Sui Testnet)*
 
 | Item | Value |
 |---|---|
-| Echo Package ID | `TBD` |
-| ProfileRegistry Object ID | `TBD` |
-| DeepBook Predict Package ID | `TBD` |
+| Echo Package ID | `0x74ddf6ea29b138db0f55db9aea82452ad80bbecf7d26bd05caa6095d05184125` |
+| ProfileRegistry Object ID | `0xb846a650ce785b26f151ec79a074a80b1263a9b508c0d67af92f4b524ca49f24` |
+| Echo Deploy Tx | `34djymTgAwgwiMmaZrq5LHqACXL3uGNZbkywrpDFNy8Y` |
+| DeepBook Predict Package ID | `0xf5ea2b3749c65d6e56507cc35388719aadb28f9cab873696a2f8687f5c785138` |
+| DeepBook Predict Object ID | `0xc8736204d12f0a7277c86388a68bf8a194b0a14c5538ad13f22cbd8e2a38028a` |
+| Predict Registry | `0x43af14fed5480c20ff77e2263d5f794c35b9fab7e2212903127062f4fe2a6e64` |
 | Predict Server Base URL | `https://predict-server.testnet.mystenlabs.com` |
 | Walrus Aggregator | `https://aggregator.walrus-testnet.walrus.space` |
 | Walrus Publisher | `https://publisher.walrus-testnet.walrus.space` |
-| dUSDC Coin Type | `TBD` |
+| dUSDC Coin Type | `0xe95040085976bfd54a1a07225cd46c8a2b4e8e2b6732f140a0fc49850ba73e1a::dusdc::DUSDC` |
 
 ---
 

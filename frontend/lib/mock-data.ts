@@ -35,6 +35,8 @@ export interface ActiveTrade {
   isPremium: boolean
   signalFeeCents: number
   btcCurrentPrice: number
+  /** Optional: real DeepBook Predict oracle ID when backed by live data */
+  oracleId?: string
 }
 
 export interface HistoricalTrade {
