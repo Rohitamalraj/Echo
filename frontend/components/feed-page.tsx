@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Zap, ArrowRight } from 'lucide-react'
+import { Zap, ArrowRight, TrendingUp, TrendingDown, Clock, Loader2, Activity, RefreshCw } from 'lucide-react'
 import Link from 'next/link'
 import { Navbar } from '@/components/navbar'
 import { TradeCard } from '@/components/trade-card'
@@ -10,14 +10,25 @@ import { CopyModal } from '@/components/copy-modal'
 import { StatsTicker } from '@/components/stats-ticker'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
+import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit'
 import { activeTrades, predictors, type ActiveTrade, type Direction } from '@/lib/mock-data'
+import { useCopyCreatedEvents, useProfiles } from '@/hooks/useProfiles'
+import { useQuery } from '@tanstack/react-query'
+import { fetchActiveOracles, formatExpiry, formatStrike } from '@/lib/predict-api'
+import { DUSDC_DECIMALS } from '@/lib/constants'
 
 type Filter = 'ALL' | Direction
+
+function formatDusd(raw: string | number) {
+  return (Number(raw) / Math.pow(10, DUSDC_DECIMALS)).toFixed(2)
+}
 
 export function FeedPage() {
   const [filter, setFilter] = useState<Filter>('ALL')
   const [copyTrade, setCopyTrade] = useState<ActiveTrade | null>(null)
   const [copyOpen, setCopyOpen] = useState(false)
+  const account = useCurrentAccount()
 
   function handleCopy(trade: ActiveTrade) {
     setCopyTrade(trade)
@@ -25,7 +36,6 @@ export function FeedPage() {
   }
 
   const filtered = filter === 'ALL' ? activeTrades : activeTrades.filter(t => t.direction === filter)
-
   const topPredictors = [...predictors].sort((a, b) => b.winRate - a.winRate).slice(0, 5)
 
   const filters: { label: string; value: Filter }[] = [
@@ -34,6 +44,23 @@ export function FeedPage() {
     { label: '▼ BTC DOWN', value: 'DOWN' },
     { label: '↔ Range', value: 'RANGE' },
   ]
+
+  // Real on-chain data
+  const { data: copyEvents, isLoading: eventsLoading, refetch: refetchEvents } = useCopyCreatedEvents(20)
+  const { data: onChainProfiles } = useProfiles()
+  const { data: oracles, isLoading: oraclesLoading } = useQuery({
+    queryKey: ['active-oracles'],
+    queryFn: fetchActiveOracles,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+
+  const hasLiveEvents = !!copyEvents && copyEvents.data.length > 0
+  const hasOracles = !!oracles && oracles.length > 0
+
+  // Build a quick address → name map from on-chain profiles
+  const profileNameMap = new Map<string, string>()
+  onChainProfiles?.forEach(p => profileNameMap.set(p.wallet, p.display_name))
 
   return (
     <>
@@ -81,9 +108,13 @@ export function FeedPage() {
             transition={{ duration: 0.8, ease: 'easeOut', delay: 0.5 }}
             className="mt-8 flex items-center justify-center gap-3"
           >
-            <Button className="bg-indigo-600 text-white hover:bg-indigo-500" size="lg">
-              Connect Wallet
-            </Button>
+            {account ? (
+              <Button className="bg-indigo-600 text-white hover:bg-indigo-500" size="lg" asChild>
+                <Link href="/portfolio">My Portfolio →</Link>
+              </Button>
+            ) : (
+              <ConnectButton connectText="Connect Wallet" className="!bg-indigo-600 !text-white hover:!bg-indigo-500 !h-11 !px-6 !text-base !rounded-lg" />
+            )}
             <Button variant="outline" size="lg" asChild>
               <Link href="/leaderboard" className="flex items-center gap-2">
                 View Leaderboard <ArrowRight className="size-4" />
@@ -91,7 +122,7 @@ export function FeedPage() {
             </Button>
           </motion.div>
 
-          {/* Social proof avatars */}
+          {/* Social proof */}
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -105,7 +136,13 @@ export function FeedPage() {
                 </Avatar>
               ))}
             </span>
-            <span><strong className="text-foreground">23 predictors</strong> posting trades right now</span>
+            {hasLiveEvents ? (
+              <span>
+                <strong className="text-emerald-400">{copyEvents.data.length} live copy trade{copyEvents.data.length !== 1 ? 's' : ''}</strong> on-chain right now
+              </span>
+            ) : (
+              <span><strong className="text-foreground">{predictors.length} predictors</strong> posting trades right now</span>
+            )}
           </motion.div>
         </div>
       </section>
@@ -116,6 +153,73 @@ export function FeedPage() {
         <div className="mb-8">
           <StatsTicker />
         </div>
+
+        {/* Live on-chain activity banner */}
+        {(hasLiveEvents || eventsLoading) && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity className="size-4 text-emerald-400" />
+                <span className="font-semibold text-emerald-400 text-sm">
+                  {eventsLoading ? 'Loading live activity…' : `${copyEvents!.data.length} live on-chain copy trades`}
+                </span>
+                {eventsLoading && <Loader2 className="size-3.5 text-emerald-400 animate-spin" />}
+              </div>
+              <button
+                onClick={() => refetchEvents()}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <RefreshCw className="size-3" /> Refresh
+              </button>
+            </div>
+
+            {hasLiveEvents && (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {copyEvents.data.slice(0, 6).map((event, i) => {
+                  const json = event.parsedJson as {
+                    copy_record_id: string
+                    follower: string
+                    predictor: string
+                    oracle_id: string
+                    is_up: boolean
+                    expiry_ms: string
+                    amount_dusd: string
+                  }
+                  const predictorName = profileNameMap.get(json.predictor)
+                    ?? `${json.predictor.slice(0, 8)}…`
+                  const followerShort = `${json.follower.slice(0, 8)}…`
+                  const expiryLabel = formatExpiry(Number(json.expiry_ms))
+                  return (
+                    <div key={i} className="flex items-center justify-between rounded-xl border border-border bg-card p-3 text-sm">
+                      <div>
+                        <div className={`flex items-center gap-1.5 font-semibold ${json.is_up ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {json.is_up ? <TrendingUp className="size-3.5" /> : <TrendingDown className="size-3.5" />}
+                          BTC {json.is_up ? 'UP' : 'DOWN'}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {followerShort} copying <span className="text-indigo-400">{predictorName}</span>
+                        </div>
+                        <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+                          <Clock className="size-3" />
+                          {expiryLabel}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold">{formatDusd(json.amount_dusd)}</div>
+                        <div className="text-xs text-muted-foreground">dUSDC</div>
+                        <Badge variant="win" className="mt-1">LIVE</Badge>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </motion.div>
+        )}
 
         <div className="flex gap-8">
           {/* Feed column */}
@@ -135,7 +239,7 @@ export function FeedPage() {
                   {f.label}
                 </button>
               ))}
-              <span className="ml-auto text-sm text-muted-foreground">{filtered.length} trades</span>
+              <span className="ml-auto text-xs text-muted-foreground">{filtered.length} trades · demo</span>
             </div>
 
             {/* Trade cards grid */}
@@ -149,6 +253,41 @@ export function FeedPage() {
           {/* Sidebar */}
           <aside className="hidden w-72 shrink-0 lg:block">
             <div className="sticky top-24 space-y-4">
+              {/* Live oracle markets */}
+              <div className="rounded-2xl border border-border bg-card p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="font-semibold font-heading text-sm flex items-center gap-2">
+                    <Activity className="size-3.5 text-emerald-400" />
+                    Live BTC Markets
+                  </h3>
+                  {oraclesLoading && <Loader2 className="size-3.5 text-muted-foreground animate-spin" />}
+                </div>
+                {hasOracles ? (
+                  <div className="space-y-2">
+                    {oracles.slice(0, 4).map(oracle => (
+                      <div key={oracle.oracle_id} className="rounded-xl border border-border p-3 text-xs">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-medium">{oracle.underlying_asset}</span>
+                          <Badge variant="win" className="text-[10px]">LIVE</Badge>
+                        </div>
+                        <div className="flex items-center justify-between text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Clock className="size-3" />
+                            {formatExpiry(oracle.expiry)}
+                          </span>
+                          <span>min {formatStrike(oracle.min_strike)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground text-center py-4">
+                    {oraclesLoading ? 'Fetching oracle data…' : 'No active markets'}
+                  </div>
+                )}
+              </div>
+
+              {/* Top predictors */}
               <div className="rounded-2xl border border-border bg-card p-5">
                 <div className="mb-4 flex items-center justify-between">
                   <h3 className="font-semibold font-heading text-sm">Top Predictors</h3>

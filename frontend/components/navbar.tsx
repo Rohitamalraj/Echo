@@ -7,7 +7,9 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import { PostTradeModal } from '@/components/post-trade-modal'
+import { CreateProfileModal } from '@/components/create-profile-modal'
 import { ConnectButton, useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit'
+import { hasProfile } from '@/lib/sui-client'
 
 const navLinks = [
   { href: '/', label: 'Feed', icon: Zap },
@@ -63,7 +65,24 @@ function WalletMenu() {
 export function Navbar() {
   const pathname = usePathname()
   const [postOpen, setPostOpen] = useState(false)
+  const [createProfileOpen, setCreateProfileOpen] = useState(false)
+  const [checkingProfile, setCheckingProfile] = useState(false)
   const account = useCurrentAccount()
+
+  async function handlePostTrade() {
+    if (!account) return
+    setCheckingProfile(true)
+    try {
+      const exists = await hasProfile(account.address)
+      if (exists) {
+        setPostOpen(true)
+      } else {
+        setCreateProfileOpen(true)
+      }
+    } finally {
+      setCheckingProfile(false)
+    }
+  }
 
   return (
     <>
@@ -106,10 +125,11 @@ export function Navbar() {
                 variant="outline"
                 size="sm"
                 className="hidden gap-1.5 sm:flex"
-                onClick={() => setPostOpen(true)}
+                onClick={handlePostTrade}
+                disabled={checkingProfile}
               >
                 <Plus className="size-4" />
-                Post Trade
+                {checkingProfile ? '…' : 'Post Trade'}
               </Button>
             )}
             {account ? (
@@ -125,6 +145,11 @@ export function Navbar() {
       </nav>
 
       <PostTradeModal open={postOpen} onOpenChange={setPostOpen} />
+      <CreateProfileModal
+        open={createProfileOpen}
+        onOpenChange={setCreateProfileOpen}
+        onSuccess={() => setPostOpen(true)}
+      />
     </>
   )
 }

@@ -35,8 +35,12 @@ export interface ActiveTrade {
   isPremium: boolean
   signalFeeCents: number
   btcCurrentPrice: number
-  /** Optional: real DeepBook Predict oracle ID when backed by live data */
+  /** Real DeepBook Predict oracle ID when backed by live data */
   oracleId?: string
+  /** On-chain PredictorProfile object ID — required for real copy transactions */
+  predictorProfileObjectId?: string
+  /** Override display fields when predictor isn't in mock data */
+  predictorDisplay?: { displayName: string; initials: string; avatarColor: string; winRate: number; streak: number }
 }
 
 export interface HistoricalTrade {

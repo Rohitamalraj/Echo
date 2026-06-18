@@ -32,7 +32,14 @@ export function CopyModal({ trade, open, onOpenChange }: CopyModalProps) {
 
   if (!open || !trade) return null
 
-  const predictor = getPredictorByAddress(trade.predictorAddress)
+  const mockPredictor = getPredictorByAddress(trade.predictorAddress)
+  const predictor = mockPredictor ?? (trade.predictorDisplay ? {
+    displayName: trade.predictorDisplay.displayName,
+    initials: trade.predictorDisplay.initials,
+    avatarColor: trade.predictorDisplay.avatarColor,
+    winRate: trade.predictorDisplay.winRate,
+    streak: trade.predictorDisplay.streak,
+  } : null)
   if (!predictor) return null
 
   const Icon = directionIcon[trade.direction]
@@ -76,7 +83,7 @@ export function CopyModal({ trade, open, onOpenChange }: CopyModalProps) {
       const amountRaw = parseDusd(amount)
 
       const tx = buildCreateCopyTx({
-        predictorProfileId: trade.predictorAddress, // in real use: the profile object ID
+        predictorProfileId: trade.predictorProfileObjectId ?? trade.predictorAddress,
         oracleId: trade.oracleId ?? trade.predictorAddress,
         strike: BigInt(Math.round(trade.strike * 1e9)),
         isUp: trade.direction === 'UP',
