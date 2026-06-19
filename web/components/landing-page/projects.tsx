@@ -31,7 +31,7 @@ export default function Projects() {
 
   const { data: positions, isLoading } = useQuery({
     queryKey: ["home-feed"],
-    queryFn: () => fetchMintedPositions(50),
+    queryFn: () => fetchMintedPositions(),
     staleTime: 30_000,
     refetchInterval: 60_000,
   })

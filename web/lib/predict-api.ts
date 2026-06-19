@@ -91,6 +91,11 @@ export async function fetchActiveOracles(): Promise<OracleState[]> {
   return all.filter((o) => o.status === "active");
 }
 
+/** All oracles including settled and expired — used for settlement checks */
+export async function fetchAllOracles(): Promise<OracleState[]> {
+  return get<OracleState[]>(`/predicts/${PREDICT_ID}/oracles`);
+}
+
 /** Oracle SVI volatility state (for implied probability) */
 export async function fetchOracleSVI(oracleId: string): Promise<OracleSVI> {
   return get<OracleSVI>(`/oracles/${oracleId}/svi/latest`);
@@ -114,7 +119,7 @@ export async function fetchAskBounds(
 }
 
 /** All minted positions (feed of trade calls) */
-export async function fetchMintedPositions(limit = 50): Promise<PositionMinted[]> {
+export async function fetchMintedPositions(): Promise<PositionMinted[]> {
   return get<PositionMinted[]>(`/positions/minted`);
 }
 

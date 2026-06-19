@@ -62,7 +62,7 @@ export default function PredictorProfilePage({ params }: Props) {
   // All minted positions — filter client-side by this trader
   const { data: allPositions, isLoading: posLoading } = useQuery({
     queryKey: ["all-minted"],
-    queryFn: () => fetchMintedPositions(200),
+    queryFn: () => fetchMintedPositions(),
     staleTime: 15_000,
     refetchInterval: 30_000,
   })

@@ -3,9 +3,12 @@
 import { useEffect, useState, useRef } from "react"
 import { X, TrendingUp, TrendingDown, Lock, CheckCircle, Loader2 } from "lucide-react"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
+import { useQuery } from "@tanstack/react-query"
 import { fetchActiveOracles, fetchOraclePrice, fetchManagers, formatStrike, formatExpiry, type OracleState } from "@/lib/predict-api"
-import { buildPostTradeTx, buildCreateManagerTx, suiClient } from "@/lib/sui-client"
+import { fetchAllProfiles } from "@/lib/sui-client"
+import { buildPostTradeTx, buildCreateManagerTx, buildCreateSignalTx, suiClient } from "@/lib/sui-client"
 import { parseDusd, DUSDC_TYPE } from "@/lib/constants"
+import { uploadToWalrus } from "@/lib/walrus"
 
 interface PostTradeModalProps {
   open: boolean
@@ -28,6 +31,17 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
   const [status, setStatus] = useState<"idle" | "loading-markets" | "posting" | "success" | "error">("idle")
   const [errorMsg, setErrorMsg] = useState("")
   const [txDigest, setTxDigest] = useState("")
+  const [reasoningBlobId, setReasoningBlobId] = useState<string | null>(null)
+
+  // Fetch the user's Echo profile to get the profile object ID for SEAL signals
+  const { data: profiles } = useQuery({
+    queryKey: ["profiles"],
+    queryFn: fetchAllProfiles,
+    staleTime: 60_000,
+    enabled: open && !!account?.address,
+  })
+  const myProfile = profiles?.find(p => p.wallet.toLowerCase() === (account?.address ?? "").toLowerCase())
+  const myProfileId = myProfile ? (myProfile.id as unknown as { id: string }).id : null
 
   useEffect(() => {
     if (!open) return
@@ -135,8 +149,33 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
       })
       const result = await signAndExecute({ transaction: tx })
       setTxDigest(result.digest)
+
+      // Upload reasoning to Walrus after trade is confirmed
+      if (reasoning.trim()) {
+        setErrorMsg("Uploading reasoning to Walrus…")
+        try {
+          const blobId = await uploadToWalrus(reasoning.trim())
+          setReasoningBlobId(blobId)
+          localStorage.setItem(`echo_reasoning_${result.digest}`, blobId)
+
+          // If premium: create SEAL encrypted signal policy
+          if (isPremium && myProfileId) {
+            setErrorMsg("Creating SEAL encrypted signal…")
+            const signalTx = buildCreateSignalTx({
+              profileObjectId: myProfileId,
+              blobId,
+              feeDusd: parseDusd(signalFee),
+            })
+            await signAndExecute({ transaction: signalTx })
+          }
+        } catch {
+          // Non-fatal — trade succeeded, reasoning upload failed
+        }
+      }
+
+      setErrorMsg("")
       setStatus("success")
-      setTimeout(() => { setStatus("idle"); setAmount(""); setReasoning(""); onOpenChange(false) }, 3000)
+      setTimeout(() => { setStatus("idle"); setAmount(""); setReasoning(""); setReasoningBlobId(null); onOpenChange(false) }, 4000)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setErrorMsg(msg.slice(0, 120)); setStatus("error")
@@ -157,6 +196,11 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
               <a href={`https://suiscan.xyz/testnet/tx/${txDigest}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#7A7FEE] hover:underline">
                 View on Suiscan →
               </a>
+            )}
+            {reasoningBlobId && (
+              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-2 text-xs text-green-600 dark:text-green-400 text-center">
+                {isPremium ? "🔒 Reasoning sealed on Walrus" : "📄 Reasoning stored on Walrus"}
+              </div>
             )}
           </div>
         ) : (

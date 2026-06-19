@@ -342,6 +342,26 @@ export function buildPostTradeTx(params: {
   return tx;
 }
 
+/** Build a PTB to create a SEAL signal policy for premium encrypted reasoning. */
+export function buildCreateSignalTx(params: {
+  profileObjectId: string;
+  blobId: string;
+  feeDusd: bigint;
+}): Transaction {
+  const tx = new Transaction();
+  // Walrus blob ID encoded as UTF-8 bytes for the Move vector<u8>
+  const blobBytes = Array.from(new TextEncoder().encode(params.blobId));
+  tx.moveCall({
+    target: `${ECHO_PACKAGE_ID}::seal_signal::create_policy`,
+    arguments: [
+      tx.object(params.profileObjectId),
+      tx.pure.vector("u8", blobBytes),
+      tx.pure.u64(params.feeDusd),
+    ],
+  });
+  return tx;
+}
+
 /** Build a PTB to settle a copy and enforce 85/15 split.
  *
  *  Steps:
@@ -359,6 +379,7 @@ export function buildSettleCopyTx(params: {
   expiryMs: bigint;
   quantity: bigint;
   payoutAmount: bigint;
+  won: boolean;
 }): Transaction {
   const {
     copyRecordId,
@@ -370,51 +391,64 @@ export function buildSettleCopyTx(params: {
     expiryMs,
     quantity,
     payoutAmount,
+    won,
   } = params;
 
   const tx = new Transaction();
 
-  const marketKey = tx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
-    arguments: [
-      tx.pure.id(oracleId),
-      tx.pure.u64(expiryMs),
-      tx.pure.u64(strike),
-    ],
-  });
+  if (won) {
+    // Win path: redeem → withdraw → settle_copy (85/15 split) → record_settlement
+    const marketKey = tx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
+      arguments: [
+        tx.pure.id(oracleId),
+        tx.pure.u64(expiryMs),
+        tx.pure.u64(strike),
+      ],
+    });
 
-  // Step 1: Redeem permissionlessly (oracle must be settled)
+    tx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::predict::redeem_permissionless`,
+      typeArguments: [DUSDC_TYPE],
+      arguments: [
+        tx.object(PREDICT_OBJECT_ID),
+        tx.object(managerObjectId),
+        tx.object(oracleId),
+        marketKey,
+        tx.pure.u64(quantity),
+        tx.object("0x6"),
+      ],
+    });
+
+    const [payoutCoin] = tx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::predict_manager::withdraw`,
+      typeArguments: [DUSDC_TYPE],
+      arguments: [
+        tx.object(managerObjectId),
+        tx.pure.u64(payoutAmount),
+      ],
+    });
+
+    tx.moveCall({
+      target: `${ECHO_PACKAGE_ID}::copy_trade::settle_copy`,
+      typeArguments: [DUSDC_TYPE],
+      arguments: [
+        tx.object(copyRecordId),
+        payoutCoin,
+        tx.object(predictorProfileId),
+        tx.object("0x6"),
+      ],
+    });
+  }
+
+  // Always record settlement on predictor's profile to update win_rate / streak
   tx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::predict::redeem_permissionless`,
-    typeArguments: [DUSDC_TYPE],
+    target: `${ECHO_PACKAGE_ID}::predictor_profile::record_settlement`,
     arguments: [
-      tx.object(PREDICT_OBJECT_ID),
-      tx.object(managerObjectId),
-      tx.object(oracleId),
-      marketKey,
-      tx.pure.u64(quantity),
-      tx.object("0x6"),
-    ],
-  });
-
-  // Step 2: Withdraw payout from manager
-  const [payoutCoin] = tx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::predict_manager::withdraw`,
-    typeArguments: [DUSDC_TYPE],
-    arguments: [
-      tx.object(managerObjectId),
-      tx.pure.u64(payoutAmount),
-    ],
-  });
-
-  // Step 3: Enforce 85/15 split via Echo contract
-  tx.moveCall({
-    target: `${ECHO_PACKAGE_ID}::copy_trade::settle_copy`,
-    typeArguments: [DUSDC_TYPE],
-    arguments: [
-      tx.object(copyRecordId),
-      payoutCoin,
       tx.object(predictorProfileId),
+      tx.pure.bool(won),
+      tx.pure.u64(won ? payoutAmount : 0n),
+      tx.pure.u64(quantity),
       tx.object("0x6"),
     ],
   });

@@ -47,7 +47,7 @@ export default function FeedPage() {
 
   const { data: positions, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["feed-positions"],
-    queryFn: () => fetchMintedPositions(100),
+    queryFn: () => fetchMintedPositions(),
     staleTime: 15_000,
     refetchInterval: 30_000,
   })
