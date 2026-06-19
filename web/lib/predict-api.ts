@@ -34,34 +34,43 @@ export interface OracleSVI {
 
 export interface OraclePriceLatest {
   oracle_id: string;
-  spot_price: number;
-  forward_price: number;
-  timestamp: number;
+  spot: number;
+  forward: number;
+  onchain_timestamp: number;
 }
 
 export interface ManagerSummary {
   manager_id: string;
   owner: string;
-  balance: number;
-  total_long_value: number;
-  total_short_value: number;
-  position_count: number;
+  balances: { quote_asset: string; balance: number }[];
+  trading_balance: number;
+  open_exposure: number;
+  redeemable_value: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  account_value: number;
+  open_positions: number;
+  awaiting_settlement_positions: number;
+}
+
+export interface ManagerPositions {
+  minted: PositionMinted[];
+  redeemed: PositionMinted[];
 }
 
 export interface PositionMinted {
   oracle_id: string;
   manager_id: string;
-  owner: string;
-  market_key: {
-    oracle_id: string;
-    expiry: number;
-    strike: number;
-    direction: number; // 0 = UP, 1 = DOWN
-  };
+  trader: string;
+  quote_asset: string;
+  expiry: number;
+  strike: number;
+  is_up: boolean;
   quantity: number;
   cost: number;
-  timestamp: number;
-  tx_digest: string;
+  ask_price: number;
+  digest: string;
+  checkpoint_timestamp_ms: number;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -114,6 +123,13 @@ export async function fetchManagerSummary(
   managerId: string
 ): Promise<ManagerSummary> {
   return get<ManagerSummary>(`/managers/${managerId}/summary`);
+}
+
+/** Open and redeemed positions for a specific manager */
+export async function fetchManagerPositions(
+  managerId: string
+): Promise<ManagerPositions> {
+  return get<ManagerPositions>(`/managers/${managerId}/positions`);
 }
 
 /** Find manager IDs owned by a wallet address */

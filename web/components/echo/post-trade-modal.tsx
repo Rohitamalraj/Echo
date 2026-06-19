@@ -3,8 +3,8 @@
 import { useEffect, useState, useRef } from "react"
 import { X, TrendingUp, TrendingDown, Lock, CheckCircle, Loader2 } from "lucide-react"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
-import { fetchActiveOracles, formatStrike, formatExpiry, type OracleState } from "@/lib/predict-api"
-import { buildPostTradeTx, suiClient } from "@/lib/sui-client"
+import { fetchActiveOracles, fetchOraclePrice, fetchManagers, formatStrike, formatExpiry, type OracleState } from "@/lib/predict-api"
+import { buildPostTradeTx, buildCreateManagerTx, suiClient } from "@/lib/sui-client"
 import { parseDusd, DUSDC_TYPE } from "@/lib/constants"
 
 interface PostTradeModalProps {
@@ -19,6 +19,7 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
 
   const [direction, setDirection] = useState<"UP" | "DOWN">("UP")
   const [oracles, setOracles] = useState<OracleState[]>([])
+  const [oracleSpots, setOracleSpots] = useState<Record<string, number>>({})
   const [selectedOracleIdx, setSelectedOracleIdx] = useState(0)
   const [amount, setAmount] = useState("")
   const [reasoning, setReasoning] = useState("")
@@ -32,9 +33,24 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
     if (!open) return
     setStatus("loading-markets")
     fetchActiveOracles()
-      .then((o) => {
-        setOracles([...o].sort((a, b) => a.expiry - b.expiry).slice(0, 4))
+      .then(async (raw) => {
+        const now = Date.now()
+        const sorted = [...raw]
+          .filter(o => o.expiry > now + 60_000) // must have at least 1 min left
+          .sort((a, b) => a.expiry - b.expiry)
+          .slice(0, 4)
+        setOracles(sorted)
+        setSelectedOracleIdx(0)
         setStatus("idle")
+        // Fetch spot prices for each oracle (for ATM strike computation)
+        const spots: Record<string, number> = {}
+        await Promise.allSettled(sorted.map(async (o) => {
+          try {
+            const p = await fetchOraclePrice(o.oracle_id)
+            if (p.spot) spots[o.oracle_id] = p.spot
+          } catch { /* ignore */ }
+        }))
+        setOracleSpots(spots)
       })
       .catch(() => setStatus("idle"))
   }, [open])
@@ -56,10 +72,23 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
   if (!open) return null
 
   const oracle = oracles[selectedOracleIdx]
-  const canPost = parseFloat(amount) > 0 && !!oracle && !!account
+  const amountNum = parseFloat(amount) || 0
+  const belowMin = amountNum > 0 && amountNum < 1
+  const canPost = amountNum >= 1 && !!oracle && !!account
+
+  // Compute ATM strike: round spot price to nearest tick
+  function atmStrike(o: OracleState): bigint {
+    const spot = oracleSpots[o.oracle_id] ?? o.min_strike
+    const tick = o.tick_size > 0 ? o.tick_size : 1_000_000_000
+    return BigInt(Math.round(spot / tick) * tick)
+  }
 
   async function handlePost() {
     if (!canPost || !account || !oracle) return
+    if (oracle.expiry <= Date.now() + 30_000) {
+      setErrorMsg("This oracle has expired. Please select a different market.")
+      setStatus("error"); return
+    }
     setStatus("posting"); setErrorMsg("")
     try {
       const coins = await suiClient.getCoins({ owner: account.address, coinType: DUSDC_TYPE })
@@ -67,21 +96,41 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
         setErrorMsg("No dUSDC in wallet. Request testnet tokens first.")
         setStatus("error"); return
       }
-      const managers = await suiClient.getOwnedObjects({
-        owner: account.address,
-        filter: { StructType: `0xf5ea2b3749c65d6e56507cc35388719aadb28f9cab873696a2f8687f5c785138::predict_manager::PredictManager` },
-      })
-      if (!managers.data.length) {
-        setErrorMsg("No PredictManager found. Please create one via the Predict protocol first.")
-        setStatus("error"); return
+
+      // PredictManagers are shared objects — use Predict Server to find by owner
+      setErrorMsg("Finding your PredictManager…")
+      let allManagers = await fetchManagers()
+      let myManager = allManagers.find(m => m.owner === account.address)
+
+      // Auto-create if none found
+      if (!myManager) {
+        setErrorMsg("Step 1/2: Creating your PredictManager — approve the wallet prompt…")
+        const createResult = await signAndExecute({ transaction: buildCreateManagerTx() })
+
+        // Retry fetching from predict server (up to 5 × 3s)
+        setErrorMsg("Waiting for indexing…")
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 3000))
+          allManagers = await fetchManagers()
+          myManager = allManagers.find(m => m.owner === account.address)
+          if (myManager) break
+        }
+
+        if (!myManager) {
+          setErrorMsg(`Manager created (tx: ${createResult.digest.slice(0, 12)}…) but not indexed yet. Wait 10s and try again.`)
+          setStatus("error"); return
+        }
+        setErrorMsg("Step 2/2: Posting your trade…")
       }
+
+      setErrorMsg("")
       const tx = buildPostTradeTx({
         oracleId: oracle.oracle_id,
-        strike: BigInt(oracle.min_strike),
+        strike: atmStrike(oracle),
         isUp: direction === "UP",
         expiryMs: BigInt(oracle.expiry),
         quantity: parseDusd(amount),
-        managerObjectId: managers.data[0].data!.objectId,
+        managerObjectId: myManager.manager_id,
         dusdCoinObjectId: coins.data[0].coinObjectId,
       })
       const result = await signAndExecute({ transaction: tx })
@@ -151,26 +200,45 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
                   <p className="text-sm text-gray-500">No active markets found. Using demo mode.</p>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
-                    {oracles.map((o, i) => (
+                    {oracles.map((o, i) => {
+                      const spot = oracleSpots[o.oracle_id]
+                      const strikeDisplay = spot
+                        ? `$${(Math.round(spot / (o.tick_size > 0 ? o.tick_size : 1_000_000_000)) * (o.tick_size > 0 ? o.tick_size : 1_000_000_000) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+                        : formatStrike(o.min_strike)
+                      return (
                       <button key={o.oracle_id} onClick={() => setSelectedOracleIdx(i)}
                         className={`rounded-xl border p-3 text-left text-xs transition-all ${selectedOracleIdx === i ? "border-[#7A7FEE]/50 bg-[#7A7FEE]/10 text-[#7A7FEE]" : "border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-300"}`}>
                         <div className="font-semibold">{formatExpiry(o.expiry)}</div>
-                        <div className="text-gray-500 mt-0.5">Strike {formatStrike(o.min_strike)}</div>
+                        <div className="text-gray-500 mt-0.5">ATM {strikeDisplay}</div>
                       </button>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </div>
 
               {/* Amount */}
               <div>
-                <label className="block text-sm font-medium text-black dark:text-white mb-2">Position size</label>
+                <label className="block text-sm font-medium text-black dark:text-white mb-2">
+                  Position size <span className="text-xs text-gray-400 font-normal">(min 1 dUSDC)</span>
+                </label>
                 <div className="relative">
                   <input
-                    type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00"
-                    className="w-full pr-20 px-4 py-3 bg-gray-100 dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700 rounded-lg text-lg font-semibold text-black dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7A7FEE] transition-all"
+                    type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="1.00" min="1" step="1"
+                    className={`w-full pr-20 px-4 py-3 bg-gray-100 dark:bg-[#1a1a1a] border rounded-lg text-lg font-semibold text-black dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 transition-all ${belowMin ? "border-red-500 focus:ring-red-500" : "border-gray-200 dark:border-gray-700 focus:ring-[#7A7FEE]"}`}
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-500">dUSDC</span>
+                </div>
+                {belowMin && (
+                  <p className="text-xs text-red-500 mt-1">Minimum position size is 1 dUSDC</p>
+                )}
+                <div className="mt-2 flex gap-2">
+                  {[1, 5, 10, 25].map(v => (
+                    <button key={v} onClick={() => setAmount(String(v))}
+                      className="flex-1 py-1.5 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 hover:border-[#7A7FEE] hover:text-[#7A7FEE] transition-colors">
+                      {v}
+                    </button>
+                  ))}
                 </div>
               </div>
 

@@ -37,6 +37,8 @@ export interface ActiveTrade {
   btcCurrentPrice: number
   /** Real DeepBook Predict oracle ID when backed by live data */
   oracleId?: string
+  /** Exact oracle expiry timestamp (ms) — overrides expiryMinutes for on-chain transactions */
+  expiryMs?: number
   /** On-chain PredictorProfile object ID — required for real copy transactions */
   predictorProfileObjectId?: string
   /** Override display fields when predictor isn't in mock data */

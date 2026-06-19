@@ -50,7 +50,16 @@ export default function CreateProfileModal({ open, onOpenChange, onSuccess }: Cr
     const tx = buildCreateProfileTx(displayName.trim())
     signAndExecute({ transaction: tx }, {
       onSuccess(result) { setTxDigest(result.digest); setStatus("success") },
-      onError(err) { setErrorMsg(err.message ?? "Transaction failed"); setStatus("error") },
+      onError(err) {
+        const msg = err.message ?? "Transaction failed"
+        // abort code 0 = EProfileAlreadyExists — treat as success
+        if (msg.includes("abort code: 0") || msg.includes("EProfileAlreadyExists")) {
+          setStatus("success")
+          setTxDigest(null)
+        } else {
+          setErrorMsg(msg); setStatus("error")
+        }
+      },
     })
   }
 

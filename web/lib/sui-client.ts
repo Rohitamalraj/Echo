@@ -7,6 +7,7 @@ import {
   PREDICT_OBJECT_ID,
   DUSDC_TYPE,
   SUI_NETWORK,
+  MIN_QUANTITY,
 } from "./constants";
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -55,23 +56,39 @@ export interface CopyRecordFields {
 
 // ── Read Functions ────────────────────────────────────────────────────────────
 
-/** Check if a wallet has a PredictorProfile in the registry */
+/** Check if a wallet has a PredictorProfile in the registry.
+ *
+ *  The `profiles` field is a Sui Table<address, ID>. Table entries are stored
+ *  as dynamic fields on the Table's UID — they do NOT appear in the object's
+ *  content fields. We must:
+ *  1. Read the registry to get the Table object ID
+ *  2. Call getDynamicFieldObject on that Table ID with the wallet address as key
+ */
 export async function hasProfile(wallet: string): Promise<boolean> {
-  const registry = await suiClient.getObject({
-    id: PROFILE_REGISTRY_ID,
-    options: { showContent: true },
-  });
-  if (!registry.data?.content || registry.data.content.dataType !== "moveObject") {
+  try {
+    const registry = await suiClient.getObject({
+      id: PROFILE_REGISTRY_ID,
+      options: { showContent: true },
+    });
+
+    if (!registry.data?.content || registry.data.content.dataType !== "moveObject") {
+      return false;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fields = registry.data.content.fields as any;
+    const tableId: string | undefined = fields?.profiles?.fields?.id?.id;
+    if (!tableId) return false;
+
+    const entry = await suiClient.getDynamicFieldObject({
+      parentId: tableId,
+      name: { type: "address", value: wallet },
+    });
+
+    return !!entry.data && !entry.error;
+  } catch {
     return false;
   }
-  const fields = registry.data.content.fields as {
-    profiles: { fields: { contents: { fields: { key: string } }[] } };
-  };
-  return (
-    fields.profiles?.fields?.contents?.some(
-      (entry) => entry.fields?.key === wallet
-    ) ?? false
-  );
 }
 
 /** Fetch a PredictorProfile by object ID */
@@ -183,7 +200,7 @@ export function buildCreateProfileTx(displayName: string): Transaction {
  *  4. echo::copy_trade::create_copy (record the link on-chain)
  */
 export function buildCreateCopyTx(params: {
-  predictorProfileId: string;
+  predictorProfileId: string | null; // null = predictor has no Echo profile, skip create_copy
   oracleId: string;
   strike: bigint;
   isUp: boolean;
@@ -203,26 +220,30 @@ export function buildCreateCopyTx(params: {
     dusdCoinObjectId,
   } = params;
 
+  // Enforce minimum quantity
+  const safeAmount = amountDusd < MIN_QUANTITY ? MIN_QUANTITY : amountDusd;
+
   const tx = new Transaction();
 
-  // Step 1: Deposit dUSDC into follower's PredictManager
+  // Split exactly the copy amount so the rest stays in wallet
+  const [copyCoin] = tx.splitCoins(tx.object(dusdCoinObjectId), [
+    tx.pure.u64(safeAmount),
+  ]);
+
+  // Step 1: Deposit into follower's PredictManager
   tx.moveCall({
     target: `${PREDICT_PACKAGE_ID}::predict_manager::deposit`,
     typeArguments: [DUSDC_TYPE],
-    arguments: [
-      tx.object(managerObjectId),
-      tx.object(dusdCoinObjectId),
-    ],
+    arguments: [tx.object(managerObjectId), copyCoin],
   });
 
   // Step 2: Mint position on DeepBook Predict
   const marketKey = tx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::market_key::new`,
+    target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
     arguments: [
       tx.pure.id(oracleId),
       tx.pure.u64(expiryMs),
       tx.pure.u64(strike),
-      tx.pure.bool(isUp),
     ],
   });
 
@@ -234,13 +255,13 @@ export function buildCreateCopyTx(params: {
       tx.object(managerObjectId),
       tx.object(oracleId),
       marketKey,
-      tx.pure.u64(amountDusd),
+      tx.pure.u64(safeAmount),
       tx.object("0x6"), // Clock
     ],
   });
 
-  // Step 3: Record the copy on Echo
-  tx.moveCall({
+  // Step 3: Record the copy on Echo (only if predictor has an Echo profile)
+  if (predictorProfileId) tx.moveCall({
     target: `${ECHO_PACKAGE_ID}::copy_trade::create_copy`,
     arguments: [
       tx.object(PROFILE_REGISTRY_ID),
@@ -277,26 +298,30 @@ export function buildPostTradeTx(params: {
     dusdCoinObjectId,
   } = params;
 
+  // Enforce minimum quantity (contract requires >= 1_000_000 µcontracts)
+  const safeQuantity = quantity < MIN_QUANTITY ? MIN_QUANTITY : quantity;
+
   const tx = new Transaction();
 
-  // Deposit dUSDC into manager
+  // Split exactly the trade amount from the wallet coin so the rest stays in wallet
+  const [tradeCoin] = tx.splitCoins(tx.object(dusdCoinObjectId), [
+    tx.pure.u64(safeQuantity),
+  ]);
+
+  // Deposit into manager — covers cost since cost = quantity × ask_price / 1e9 ≤ quantity
   tx.moveCall({
     target: `${PREDICT_PACKAGE_ID}::predict_manager::deposit`,
     typeArguments: [DUSDC_TYPE],
-    arguments: [
-      tx.object(managerObjectId),
-      tx.object(dusdCoinObjectId),
-    ],
+    arguments: [tx.object(managerObjectId), tradeCoin],
   });
 
-  // Construct market key
+  // market_key::up or market_key::down — direction encoded in function name
   const marketKey = tx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::market_key::new`,
+    target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
     arguments: [
       tx.pure.id(oracleId),
       tx.pure.u64(expiryMs),
       tx.pure.u64(strike),
-      tx.pure.bool(isUp),
     ],
   });
 
@@ -309,7 +334,7 @@ export function buildPostTradeTx(params: {
       tx.object(managerObjectId),
       tx.object(oracleId),
       marketKey,
-      tx.pure.u64(quantity),
+      tx.pure.u64(safeQuantity),
       tx.object("0x6"),
     ],
   });
@@ -350,12 +375,11 @@ export function buildSettleCopyTx(params: {
   const tx = new Transaction();
 
   const marketKey = tx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::market_key::new`,
+    target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
     arguments: [
       tx.pure.id(oracleId),
       tx.pure.u64(expiryMs),
       tx.pure.u64(strike),
-      tx.pure.bool(isUp),
     ],
   });
 

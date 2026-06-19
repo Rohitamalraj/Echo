@@ -3,8 +3,9 @@
 import { useState, useEffect, useRef } from "react"
 import { X, TrendingUp, TrendingDown, Shield, Loader2, Zap } from "lucide-react"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
-import { buildCreateCopyTx, suiClient } from "@/lib/sui-client"
+import { buildCreateCopyTx, buildCreateManagerTx, suiClient } from "@/lib/sui-client"
 import { DUSDC_TYPE, parseDusd } from "@/lib/constants"
+import { fetchManagers } from "@/lib/predict-api"
 import type { ActiveTrade } from "@/lib/mock-data"
 import { getPredictorByAddress } from "@/lib/mock-data"
 
@@ -60,7 +61,7 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
   const predictorCut = potentialPayout * 0.15
 
   async function handleConfirm() {
-    if (!account || amountNum <= 0) return
+    if (!account || amountNum <= 0 || !trade) return
     setStatus("posting"); setErrorMsg("")
     try {
       const coins = await suiClient.getCoins({ owner: account.address, coinType: DUSDC_TYPE })
@@ -68,22 +69,38 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
         setErrorMsg("No dUSDC in wallet. Request testnet tokens first.")
         setStatus("error"); return
       }
-      const managers = await suiClient.getOwnedObjects({
-        owner: account.address,
-        filter: { StructType: `0xf5ea2b3749c65d6e56507cc35388719aadb28f9cab873696a2f8687f5c785138::predict_manager::PredictManager` },
-      })
-      if (!managers.data.length) {
-        setErrorMsg("No PredictManager found. Create one via the Predict protocol first.")
-        setStatus("error"); return
+
+      // Case-insensitive address match — wallet sdk may use different casing
+      const walletAddr = account.address.toLowerCase()
+      let allManagers = await fetchManagers()
+      let myManager = allManagers.find(m => m.owner.toLowerCase() === walletAddr)
+
+      // Auto-create manager if none found
+      if (!myManager) {
+        setErrorMsg("Creating your PredictManager — approve the wallet prompt…")
+        const createResult = await signAndExecute({ transaction: buildCreateManagerTx() })
+        setErrorMsg(`Manager created (${createResult.digest.slice(0, 10)}…). Waiting for indexing…`)
+        for (let i = 0; i < 6; i++) {
+          await new Promise(r => setTimeout(r, 3000))
+          allManagers = await fetchManagers()
+          myManager = allManagers.find(m => m.owner.toLowerCase() === walletAddr)
+          if (myManager) break
+        }
+        if (!myManager) {
+          setErrorMsg("Manager not indexed yet. Please try again in 10 seconds.")
+          setStatus("error"); return
+        }
       }
+
+      setErrorMsg("")
       const tx = buildCreateCopyTx({
-        predictorProfileId: trade.predictorProfileObjectId ?? trade.predictorAddress,
+        predictorProfileId: trade.predictorProfileObjectId ?? null,
         oracleId: trade.oracleId ?? trade.predictorAddress,
         strike: BigInt(Math.round(trade.strike * 1e9)),
         isUp: trade.direction === "UP",
-        expiryMs: BigInt(Date.now() + trade.expiryMinutes * 60_000),
+        expiryMs: BigInt(trade.expiryMs ?? (Date.now() + trade.expiryMinutes * 60_000)),
         amountDusd: parseDusd(amount),
-        managerObjectId: managers.data[0].data!.objectId,
+        managerObjectId: myManager.manager_id,
         dusdCoinObjectId: coins.data[0].coinObjectId,
       })
       const result = await signAndExecute({ transaction: tx })

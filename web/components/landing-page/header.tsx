@@ -66,7 +66,7 @@ export default function Header() {
               <nav className="hidden md:block">
                 <ul className="flex space-x-6">
                   {[
-                    { href: "/", label: "Feed" },
+                    { href: "/feed", label: "Feed" },
                     { href: "/leaderboard", label: "Leaderboard" },
                     { href: "/portfolio", label: "Portfolio" },
                   ].map(({ href, label }) => (

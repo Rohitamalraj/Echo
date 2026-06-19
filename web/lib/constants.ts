@@ -50,6 +50,7 @@ export const FOLLOWER_BPS = 8500n; // 85%
 export const PREDICTOR_BPS = 1500n; // 15%
 export const BPS_DENOMINATOR = 10000n;
 export const MIN_COPY_DUSD = 1_000_000n; // 1 dUSDC (6 decimals)
+export const MIN_QUANTITY = 1_000_000n;  // minimum contracts for predict::mint
 export const DUSDC_DECIMALS = 6;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
