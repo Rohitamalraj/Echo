@@ -1,20 +1,24 @@
 "use client"
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-import { SuiClientProvider, WalletProvider } from "@mysten/dapp-kit"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { SuiClientProvider, WalletProvider } from "@mysten/dapp-kit"
+import { getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc"
+import type { ReactNode } from "react"
 
-// The @mysten/dapp-kit v1.1.1 types are mismatched with @mysten/sui v2.19.0.
-// At runtime SuiClientProvider accepts { url } directly — cast to bypass the TS error.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const networks = { testnet: { url: "https://fullnode.testnet.sui.io:443" } } as any
+const networks = {
+  testnet: { url: getJsonRpcFullnodeUrl("testnet"), network: "testnet" as const },
+}
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 10_000, refetchInterval: 30_000 },
+  },
+})
 
-export default function SuiProvider({ children }: { children: React.ReactNode }) {
+export default function SuiProvider({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networks} defaultNetwork="testnet">
+      <SuiClientProvider networks={networks as never} defaultNetwork="testnet">
         <WalletProvider autoConnect>
           {children}
         </WalletProvider>
