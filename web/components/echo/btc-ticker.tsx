@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { TrendingUp, TrendingDown, Activity } from "lucide-react"
+import CoinLogo from "@/components/echo/coin-logo"
 
 interface BtcData {
   price: number
@@ -71,9 +72,7 @@ export default function BtcTicker() {
     <div className="w-full rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-[#1a1a1a] px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
       {/* Main price */}
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-[#f7931a]/10 flex items-center justify-center">
-          <span className="text-[#f7931a] text-sm font-bold">₿</span>
-        </div>
+        <CoinLogo symbol="BTC" size={32} />
         <div>
           <p className="text-xs text-gray-500 leading-none mb-0.5">BTC / USD · Live</p>
           <p className={`text-xl font-bold tabular-nums transition-colors duration-300 ${

@@ -3,6 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { ArrowUpRight, Clock, TrendingUp, TrendingDown, Loader2 } from "lucide-react"
+import CoinLogo from "@/components/echo/coin-logo"
 import { fetchMintedPositions, type PositionMinted } from "@/lib/predict-api"
 import { fetchAllProfiles, type PredictorProfileFields } from "@/lib/sui-client"
 import { useQuery } from "@tanstack/react-query"
@@ -125,8 +126,9 @@ export default function Projects() {
                     ? "bg-green-500/10 text-green-500 border-green-500/20"
                     : "bg-red-500/10 text-red-500 border-red-500/20"
                 }`}>
+                  <CoinLogo symbol="BTC" size={13} />
                   {isUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  <span>BTC {isUp ? "UP" : "DOWN"} ${(pos.strike / 1e9).toLocaleString("en-US", { maximumFractionDigits: 0 })}</span>
+                  <span>{isUp ? "UP" : "DOWN"} ${(pos.strike / 1e9).toLocaleString("en-US", { maximumFractionDigits: 0 })}</span>
                   <span className="ml-auto flex items-center gap-1 text-gray-400">
                     <Clock className="w-3 h-3" />
                     {formatExpiry(pos.expiry)}

@@ -456,12 +456,136 @@ export function buildSettleCopyTx(params: {
   return tx;
 }
 
+/** Build a PTB to redeem a predictor's own minted position after oracle settlement.
+ *  Unlike settle_copy, there is no 85/15 split — all payout goes back to the predictor's wallet.
+ */
+export function buildRedeemOwnTradeTx(params: {
+  managerObjectId: string;
+  oracleId: string;
+  strike: bigint;
+  isUp: boolean;
+  expiryMs: bigint;
+  quantity: bigint;
+  won: boolean;
+  walletAddress: string;
+}): Transaction {
+  const {
+    managerObjectId, oracleId, strike, isUp, expiryMs,
+    quantity, won, walletAddress,
+  } = params;
+
+  const tx = new Transaction();
+
+  if (won) {
+    const marketKey = tx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
+      arguments: [
+        tx.pure.id(oracleId),
+        tx.pure.u64(expiryMs),
+        tx.pure.u64(strike),
+      ],
+    });
+
+    tx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::predict::redeem_permissionless`,
+      typeArguments: [DUSDC_TYPE],
+      arguments: [
+        tx.object(PREDICT_OBJECT_ID),
+        tx.object(managerObjectId),
+        tx.object(oracleId),
+        marketKey,
+        tx.pure.u64(quantity),
+        tx.object("0x6"),
+      ],
+    });
+
+    const [payoutCoin] = tx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::predict_manager::withdraw`,
+      typeArguments: [DUSDC_TYPE],
+      arguments: [tx.object(managerObjectId), tx.pure.u64(quantity)],
+    });
+
+    tx.transferObjects([payoutCoin], tx.pure.address(walletAddress));
+  }
+
+  return tx;
+}
+
 /** Create a PredictManager (one per wallet, needed before first mint) */
 export function buildCreateManagerTx(): Transaction {
   const tx = new Transaction();
   tx.moveCall({
     target: `${PREDICT_PACKAGE_ID}::predict::create_manager`,
     arguments: [],
+  });
+  return tx;
+}
+
+/** Withdraw dUSDC from a PredictManager back to the user's wallet.
+ *  Calls predict_manager::withdraw → Coin<DUSDC> → transferObjects to wallet.
+ */
+export function buildWithdrawFromManagerTx(params: {
+  managerObjectId: string;
+  amount: bigint;
+  walletAddress: string;
+}): Transaction {
+  const tx = new Transaction();
+  const [coin] = tx.moveCall({
+    target: `${PREDICT_PACKAGE_ID}::predict_manager::withdraw`,
+    typeArguments: [DUSDC_TYPE],
+    arguments: [
+      tx.object(params.managerObjectId),
+      tx.pure.u64(params.amount),
+    ],
+  });
+  tx.transferObjects([coin], tx.pure.address(params.walletAddress));
+  return tx;
+}
+
+/** Fetch all SEAL signal policies created by a predictor (for premium signal unlocking). */
+export async function fetchSignalPolicies(
+  predictorAddress: string
+): Promise<{ objectId: string; blobId: string; feeDusd: string }[]> {
+  const events = await suiClient.queryEvents({
+    query: {
+      MoveEventType: `${ECHO_PACKAGE_ID}::seal_signal::PolicyCreated`,
+    },
+    limit: 200,
+  });
+  return events.data
+    .filter(
+      (e) => (e.parsedJson as { predictor: string }).predictor === predictorAddress
+    )
+    .map((e) => {
+      const j = e.parsedJson as {
+        policy_id: string;
+        blob_id: string;
+        fee_dusd: string;
+      };
+      return { objectId: j.policy_id, blobId: j.blob_id, feeDusd: j.fee_dusd };
+    });
+}
+
+/** Build a PTB to pay the fee for a premium SEAL signal and unlock the encrypted Walrus blob. */
+export function buildPaySignalFeeTx(params: {
+  signalPolicyObjectId: string;
+  predictorProfileObjectId: string;
+  dusdCoinObjectId: string;
+  feeDusd: bigint;
+}): Transaction {
+  const tx = new Transaction();
+  const [feeCoin] = tx.splitCoins(tx.object(params.dusdCoinObjectId), [
+    tx.pure.u64(params.feeDusd),
+  ]);
+  tx.moveCall({
+    target: `${ECHO_PACKAGE_ID}::seal_signal::pay_fee`,
+    typeArguments: [DUSDC_TYPE],
+    arguments: [
+      tx.object(params.signalPolicyObjectId),
+      tx.object(params.predictorProfileObjectId),
+      feeCoin,
+      tx.object("0x6"),
+    ],
   });
   return tx;
 }

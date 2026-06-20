@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useRef } from "react"
 import { X, TrendingUp, TrendingDown, Shield, Loader2, Zap } from "lucide-react"
+import CoinLogo from "@/components/echo/coin-logo"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { buildCreateCopyTx, buildCreateManagerTx, suiClient } from "@/lib/sui-client"
 import { DUSDC_TYPE, parseDusd } from "@/lib/constants"
 import { fetchManagers } from "@/lib/predict-api"
 import type { ActiveTrade } from "@/lib/mock-data"
-import { getPredictorByAddress } from "@/lib/mock-data"
 
 interface CopyModalProps {
   trade: ActiveTrade | null
@@ -49,11 +49,10 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
 
   if (!open || !trade) return null
 
-  const predictor = getPredictorByAddress(trade.predictorAddress)
-  const name = predictor?.displayName ?? trade.predictorDisplay?.displayName ?? "Unknown"
-  const winRate = predictor?.winRate ?? trade.predictorDisplay?.winRate ?? 0
-  const streak = predictor?.streak ?? trade.predictorDisplay?.streak ?? 0
-  const initials = (predictor?.initials ?? name.slice(0, 2)).toUpperCase()
+  const name = trade.predictorDisplay?.displayName ?? "Unknown"
+  const winRate = trade.predictorDisplay?.winRate ?? 0
+  const streak = trade.predictorDisplay?.streak ?? 0
+  const initials = name.slice(0, 2).toUpperCase()
 
   const amountNum = parseFloat(amount) || 0
   const potentialPayout = amountNum * (trade.impliedProb > 50 ? 1.7 : 2.1)
@@ -162,7 +161,8 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
               <div className="bg-gray-50 dark:bg-[#1a1a1a] rounded-xl p-4 space-y-3">
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500 dark:text-gray-400">Prediction</span>
-                  <span className={`font-semibold ${dirColor[trade.direction]}`}>
+                  <span className={`font-semibold flex items-center gap-1 ${dirColor[trade.direction]}`}>
+                    <CoinLogo symbol="BTC" size={14} />
                     {dirLabel[trade.direction]} ${trade.strike.toLocaleString()}
                   </span>
                 </div>

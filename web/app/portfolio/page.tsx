@@ -4,13 +4,13 @@ import { useState } from "react"
 import Link from "next/link"
 import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
-import { portfolioPositions, getPredictorByAddress } from "@/lib/mock-data"
-import { fetchFollowerCopies, fetchAllProfiles, buildSettleCopyTx } from "@/lib/sui-client"
+import { fetchFollowerCopies, fetchAllProfiles, buildSettleCopyTx, buildRedeemOwnTradeTx, buildWithdrawFromManagerTx } from "@/lib/sui-client"
 import { fetchManagers, fetchManagerSummary, fetchManagerPositions, fetchAllOracles, type ManagerSummary } from "@/lib/predict-api"
 import { DUSDC_DECIMALS, MIN_QUANTITY } from "@/lib/constants"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { TrendingUp, DollarSign, Activity, BarChart2, Loader2, ExternalLink, CheckCircle2, XCircle } from "lucide-react"
+import { TrendingUp, TrendingDown, DollarSign, Activity, BarChart2, Loader2, ExternalLink, CheckCircle2, XCircle } from "lucide-react"
+import CoinLogo from "@/components/echo/coin-logo"
 
 function dirClasses(dir: string) {
   if (dir === "UP" || dir === "up") return "bg-green-500/10 text-green-500 border border-green-500/20"
@@ -46,6 +46,11 @@ export default function PortfolioPage() {
   const queryClient = useQueryClient()
   const [settlingId, setSettlingId] = useState<string | null>(null)
   const [settleError, setSettleError] = useState<string | null>(null)
+  const [redeemingDigest, setRedeemingDigest] = useState<string | null>(null)
+  const [redeemError, setRedeemError] = useState<string | null>(null)
+  const [withdrawing, setWithdrawing] = useState(false)
+  const [withdrawError, setWithdrawError] = useState<string | null>(null)
+  const [withdrawSuccess, setWithdrawSuccess] = useState(false)
 
   // Find user's PredictManager via Predict Server
   const { data: managerData, isLoading: managerLoading } = useQuery({
@@ -104,6 +109,10 @@ export default function PortfolioPage() {
 
   const isLoading = managerLoading || summaryLoading || copyLoading || positionsLoading
   const isLive = !!managerData && !!managerSummary
+  // Key-based lookup: redeem tx digests differ from mint tx digests, so match by position identity
+  const redeemedKeys = new Set(
+    (managerPositions?.redeemed ?? []).map(p => `${p.oracle_id}:${p.strike}:${p.expiry}:${p.is_up}`)
+  )
 
   // Build copy events display
   const myCopyEvents = (copyEvents ?? []).map((e) => {
@@ -177,6 +186,81 @@ export default function PortfolioPage() {
       setSettleError(msg.slice(0, 100))
     } finally {
       setSettlingId(null)
+    }
+  }
+
+  async function handleWithdrawAll() {
+    if (!account || !managerData || !managerSummary) return
+    const balance = managerSummary.trading_balance
+    if (balance <= 0) return
+    setWithdrawing(true)
+    setWithdrawError(null)
+    setWithdrawSuccess(false)
+    try {
+      const tx = buildWithdrawFromManagerTx({
+        managerObjectId: managerData.manager_id,
+        amount: BigInt(balance),
+        walletAddress: account.address,
+      })
+      await signAndExecute({ transaction: tx })
+      setWithdrawSuccess(true)
+      queryClient.invalidateQueries({ queryKey: ["manager-summary"] })
+      queryClient.invalidateQueries({ queryKey: ["manager-positions"] })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setWithdrawError(msg.slice(0, 120))
+    } finally {
+      setWithdrawing(false)
+    }
+  }
+
+  async function handleRedeemOwn(pos: { oracle_id: string; strike: number; is_up: boolean; expiry: number; quantity: number; digest: string; manager_id: string }) {
+    if (!account) return
+    setRedeemingDigest(pos.digest)
+    setRedeemError(null)
+    try {
+      const oracle = allOracles?.find(o => o.oracle_id === pos.oracle_id)
+      if (!oracle) throw new Error("Oracle not found")
+      if (oracle.status !== "settled" || oracle.settlement_price == null) {
+        throw new Error("Oracle not settled yet — try again after expiry")
+      }
+      const won = pos.is_up
+        ? oracle.settlement_price > pos.strike
+        : oracle.settlement_price < pos.strike
+
+      if (!won) {
+        setRedeemError("This trade was a loss — no payout to claim.")
+        return
+      }
+
+      // Debug: log exact values going into the tx
+      console.log("[Claim] pos.oracle_id:", pos.oracle_id)
+      console.log("[Claim] pos.strike (raw):", pos.strike, "→ BigInt:", BigInt(pos.strike))
+      console.log("[Claim] pos.is_up:", pos.is_up)
+      console.log("[Claim] pos.expiry:", pos.expiry, "oracle.expiry:", oracle.expiry, "match?", pos.expiry === oracle.expiry)
+      console.log("[Claim] pos.quantity (raw):", pos.quantity, "→ BigInt:", BigInt(pos.quantity))
+      console.log("[Claim] pos.manager_id:", pos.manager_id)
+      console.log("[Claim] oracle.settlement_price:", oracle.settlement_price, "won:", won)
+
+      const tx = buildRedeemOwnTradeTx({
+        managerObjectId: pos.manager_id,
+        oracleId: pos.oracle_id,
+        strike: BigInt(pos.strike),
+        isUp: pos.is_up,
+        expiryMs: BigInt(oracle.expiry),
+        quantity: BigInt(pos.quantity),
+        won,
+        walletAddress: account.address,
+      })
+      await signAndExecute({ transaction: tx })
+      queryClient.invalidateQueries({ queryKey: ["manager-positions"] })
+      queryClient.invalidateQueries({ queryKey: ["manager-summary"] })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error("[Claim] error:", e)
+      setRedeemError(msg.slice(0, 120))
+    } finally {
+      setRedeemingDigest(null)
     }
   }
 
@@ -255,8 +339,9 @@ export default function PortfolioPage() {
           ) : null}
 
           {!isLive && !isLoading && account && (
-            <div className="px-4 py-2 mb-6 bg-[#f59e0b]/10 border border-[#f59e0b]/20 rounded-lg text-[#f59e0b] text-xs font-medium">
-              Showing demo data — no PredictManager found for this wallet yet.
+            <div className="card p-12 text-center shadow-md mb-8">
+              <p className="text-gray-500 dark:text-gray-400 text-sm mb-1">No PredictManager found for this wallet.</p>
+              <p className="text-xs text-gray-400">Click <strong className="text-[#7A7FEE]">Post Trade</strong> to create one and start trading.</p>
             </div>
           )}
 
@@ -272,6 +357,36 @@ export default function PortfolioPage() {
               </div>
             ))}
           </div>
+
+          {/* Withdraw Manager Balance */}
+          {isLive && liveBalance > 0 && (
+            <div className="card p-5 shadow-md mb-8 flex flex-col sm:flex-row sm:items-center gap-4 border border-[#7A7FEE]/20">
+              <div className="flex items-center gap-3 flex-1">
+                <div className="w-10 h-10 rounded-full bg-[#7A7FEE]/10 flex items-center justify-center flex-shrink-0">
+                  <DollarSign className="w-5 h-5 text-[#7A7FEE]" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-black dark:text-white">
+                    Manager Balance: <span className="text-[#7A7FEE]">{(liveBalance / 1e6).toFixed(2)} dUSDC</span>
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Winnings + unspent deposits sit here — withdraw to move them to your Sui wallet.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-1">
+                <button
+                  onClick={handleWithdrawAll}
+                  disabled={withdrawing}
+                  className="text-sm px-4 py-2 rounded-lg bg-[#7A7FEE] text-white font-semibold hover:bg-[#6a6fde] transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {withdrawing ? <><Loader2 className="w-4 h-4 animate-spin" /> Withdrawing…</> : "Withdraw All to Wallet"}
+                </button>
+                {withdrawSuccess && <p className="text-xs text-green-500">Withdrawn! Check your wallet.</p>}
+                {withdrawError && <p className="text-xs text-red-400 max-w-xs text-right">{withdrawError}</p>}
+              </div>
+            </div>
+          )}
 
           {/* Your Trades — minted positions from Post Trade */}
           {isLive && (
@@ -290,18 +405,35 @@ export default function PortfolioPage() {
                     <table className="w-full">
                       <thead>
                         <tr className="border-b border-gray-200 dark:border-gray-700">
-                          {["Market", "Direction", "Strike", "Expiry", "Quantity", "Cost", "Tx"].map(h => (
+                          {["Market", "Direction", "Strike", "Expiry", "Quantity", "Cost", "Tx", "Result", "Action"].map(h => (
                             <th key={h} className="p-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
+                        {redeemError && (
+                          <tr>
+                            <td colSpan={9} className="px-4 py-2">
+                              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-500">{redeemError}</div>
+                            </td>
+                          </tr>
+                        )}
                         {myMinted.map((pos, i) => {
                           const expired = pos.expiry <= Date.now()
+                          const oracle = allOracles?.find(o => o.oracle_id === pos.oracle_id)
+                          const isSettled = oracle?.status === "settled" && oracle.settlement_price != null
+                          const won = isSettled
+                            ? (pos.is_up ? oracle!.settlement_price! > pos.strike : oracle!.settlement_price! < pos.strike)
+                            : null
                           return (
                             <tr key={pos.digest + i} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-[#1e1e1e] transition-colors">
-                              <td className="p-4 text-sm text-gray-700 dark:text-gray-300">{pos.oracle_id.slice(0, 8)}…</td>
-                              <td className="p-4"><span className={`text-xs px-2 py-1 rounded-md font-semibold ${dirClasses(pos.is_up ? "UP" : "DOWN")}`}>{pos.is_up ? "UP" : "DOWN"}</span></td>
+                              <td className="p-4">
+                                <span className="flex items-center gap-1.5 text-sm font-semibold text-black dark:text-white">
+                                  <CoinLogo symbol={oracle?.underlying_asset ?? "BTC"} size={18} />
+                                  {oracle?.underlying_asset ?? "BTC"}
+                                </span>
+                              </td>
+                              <td className="p-4"><span className={`text-xs px-2 py-1 rounded-md font-semibold flex items-center gap-1 w-fit ${dirClasses(pos.is_up ? "UP" : "DOWN")}`}>{pos.is_up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}{pos.is_up ? "UP" : "DOWN"}</span></td>
                               <td className="p-4 text-sm text-gray-700 dark:text-gray-300">{formatStrikeRaw(pos.strike)}</td>
                               <td className={`p-4 text-sm font-medium ${expired ? "text-red-500" : "text-[#f59e0b]"}`}>{formatExpiry(pos.expiry)}</td>
                               <td className="p-4 text-sm font-medium text-black dark:text-white">{(pos.quantity / 1e6).toFixed(2)}</td>
@@ -310,6 +442,36 @@ export default function PortfolioPage() {
                                 <a href={`https://suiscan.xyz/testnet/tx/${pos.digest}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#7A7FEE] hover:underline">
                                   {pos.digest.slice(0, 8)}… <ExternalLink className="w-3 h-3 inline" />
                                 </a>
+                              </td>
+                              <td className="p-4">
+                                {isSettled ? (
+                                  won
+                                    ? <span className="flex items-center gap-1 text-xs text-green-500 font-semibold"><CheckCircle2 className="w-3.5 h-3.5" /> Won</span>
+                                    : <span className="flex items-center gap-1 text-xs text-red-400 font-semibold"><XCircle className="w-3.5 h-3.5" /> Lost</span>
+                                ) : expired ? (
+                                  <span className="text-xs text-gray-400">Settling…</span>
+                                ) : (
+                                  <span className="text-xs px-2 py-1 rounded-md bg-[#f59e0b]/10 text-[#f59e0b] font-medium">Live</span>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                {redeemedKeys.has(`${pos.oracle_id}:${pos.strike}:${pos.expiry}:${pos.is_up}`) && won ? (
+                                  <span className="text-xs text-gray-400">Claimed</span>
+                                ) : redeemedKeys.has(`${pos.oracle_id}:${pos.strike}:${pos.expiry}:${pos.is_up}`) && !won ? (
+                                  <span className="text-xs text-gray-400">—</span>
+                                ) : isSettled && won ? (
+                                  <button
+                                    onClick={() => handleRedeemOwn({ ...pos, manager_id: pos.manager_id })}
+                                    disabled={redeemingDigest === pos.digest}
+                                    className="text-xs px-3 py-1.5 rounded-md bg-[#7A7FEE] text-white font-medium hover:bg-[#6a6fde] transition-colors disabled:opacity-50 flex items-center gap-1"
+                                  >
+                                    {redeemingDigest === pos.digest
+                                      ? <><Loader2 className="w-3 h-3 animate-spin" /> Claiming…</>
+                                      : "Claim"}
+                                  </button>
+                                ) : (
+                                  <span className="text-xs text-gray-400">—</span>
+                                )}
                               </td>
                             </tr>
                           )
@@ -399,87 +561,6 @@ export default function PortfolioPage() {
             </>
           )}
 
-          {/* Open Positions from mock (fallback) */}
-          {!isLive && (
-            <>
-              <h2 className="text-black dark:text-white mb-6 text-2xl md:text-3xl font-medium leading-tight">
-                Open <span className="text-[#7A7FEE]">Positions</span>
-              </h2>
-              <div className="card overflow-hidden shadow-md mb-10">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-gray-200 dark:border-gray-700">
-                        {["Predictor", "Direction", "Strike", "Amount", "Status"].map(h => (
-                          <th key={h} className="p-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {portfolioPositions.filter(p => p.outcome === "OPEN").map(pos => {
-                        const predictor = getPredictorByAddress(pos.predictorAddress)
-                        const name = predictor?.displayName ?? "Unknown"
-                        return (
-                          <tr key={pos.id} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-[#1e1e1e] transition-colors">
-                            <td className="p-4">
-                              <Link href={`/predictor/${pos.predictorAddress}`} className="flex items-center gap-2 group">
-                                <div className="w-7 h-7 rounded-full bg-[#7A7FEE] flex items-center justify-center text-white text-xs font-semibold">{name.slice(0,2).toUpperCase()}</div>
-                                <span className="text-sm font-medium text-black dark:text-white group-hover:text-[#7A7FEE] transition-colors">{name}</span>
-                              </Link>
-                            </td>
-                            <td className="p-4"><span className={`text-xs px-2 py-1 rounded-md font-semibold ${dirClasses(pos.direction)}`}>{pos.direction}</span></td>
-                            <td className="p-4 text-sm text-gray-700 dark:text-gray-300">${pos.strike.toLocaleString()}</td>
-                            <td className="p-4 text-sm font-medium text-black dark:text-white">{(pos.amountCents / 100).toFixed(2)} dUSDC</td>
-                            <td className="p-4"><span className="text-xs px-2 py-1 rounded-md bg-[#f59e0b]/10 text-[#f59e0b] font-medium">Pending</span></td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Settled History */}
-              <h2 className="text-black dark:text-white mb-6 text-2xl md:text-3xl font-medium leading-tight">
-                Settled <span className="text-[#7A7FEE]">History</span>
-              </h2>
-              <div className="card overflow-hidden shadow-md">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-gray-200 dark:border-gray-700">
-                        {["Predictor", "Direction", "Strike", "Amount", "Payout", "Result"].map(h => (
-                          <th key={h} className="p-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {portfolioPositions.filter(p => p.outcome !== "OPEN").map(pos => {
-                        const predictor = getPredictorByAddress(pos.predictorAddress)
-                        const name = predictor?.displayName ?? "Unknown"
-                        const won = pos.outcome === "WIN"
-                        return (
-                          <tr key={pos.id} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-[#1e1e1e] transition-colors">
-                            <td className="p-4">
-                              <Link href={`/predictor/${pos.predictorAddress}`} className="flex items-center gap-2 group">
-                                <div className="w-7 h-7 rounded-full bg-[#7A7FEE] flex items-center justify-center text-white text-xs font-semibold">{name.slice(0,2).toUpperCase()}</div>
-                                <span className="text-sm font-medium text-black dark:text-white group-hover:text-[#7A7FEE] transition-colors">{name}</span>
-                              </Link>
-                            </td>
-                            <td className="p-4"><span className={`text-xs px-2 py-1 rounded-md font-semibold ${dirClasses(pos.direction)}`}>{pos.direction}</span></td>
-                            <td className="p-4 text-sm text-gray-700 dark:text-gray-300">${pos.strike.toLocaleString()}</td>
-                            <td className="p-4 text-sm text-gray-700 dark:text-gray-300">{(pos.amountCents/100).toFixed(2)} dUSDC</td>
-                            <td className="p-4 text-sm font-medium">{won ? <span className="text-green-500">+{(pos.payoutCents/100).toFixed(2)}</span> : <span className="text-red-500">0</span>}</td>
-                            <td className="p-4"><span className={`text-xs px-2 py-1 rounded-md font-medium ${won ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"}`}>{won ? "Won" : "Lost"}</span></td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
-          )}
         </section>
       </div>
 

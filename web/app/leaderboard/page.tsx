@@ -4,7 +4,6 @@ import { useState } from "react"
 import Link from "next/link"
 import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
-import { predictors } from "@/lib/mock-data"
 import { useProfiles, bpsToPercent } from "@/hooks/useProfiles"
 import type { PredictorProfileFields } from "@/lib/sui-client"
 import { ArrowUpRight, TrendingUp, Loader2, RefreshCw } from "lucide-react"
@@ -39,30 +38,13 @@ function onChainToRow(p: PredictorProfileFields) {
   }
 }
 
-// Normalise mock predictor → same display shape
-function mockToRow(p: (typeof predictors)[0]) {
-  return {
-    address: p.address,
-    displayName: p.displayName,
-    winRate: p.winRate,
-    totalTrades: p.totalTrades,
-    streak: p.streak,
-    followerCount: p.followerCount,
-    roi7d: p.roi7d,
-    isLive: false,
-  }
-}
-
 export default function LeaderboardPage() {
   const [sortBy, setSortBy] = useState<SortKey>("winRate")
   const [minTrades, setMinTrades] = useState(0)
 
   const { data: onChainProfiles, isLoading, refetch } = useProfiles()
 
-  const isLive = !!onChainProfiles && onChainProfiles.length > 0
-  const rows = isLive
-    ? onChainProfiles.map(onChainToRow)
-    : predictors.map(mockToRow)
+  const rows = (onChainProfiles ?? []).map(onChainToRow)
 
   const sorted = [...rows]
     .filter((p) => p.totalTrades >= minTrades)
@@ -81,9 +63,7 @@ export default function LeaderboardPage() {
                 <span className="block text-[#7A7FEE] dark:text-[#7A7FEE]">Leaderboard</span>
               </h1>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                {isLive
-                  ? `${rows.length} verified predictors · live on-chain data`
-                  : "Demo data — connect wallet to see live profiles"}
+                {isLoading ? "Loading…" : `${rows.length} verified predictors · live on-chain data`}
               </p>
             </div>
             <button
@@ -135,13 +115,13 @@ export default function LeaderboardPage() {
               <Loader2 className="w-8 h-8 animate-spin text-[#7A7FEE] mx-auto mb-3" />
               <p className="text-gray-500 dark:text-gray-400 text-sm">Loading on-chain profiles...</p>
             </div>
+          ) : rows.length === 0 ? (
+            <div className="card p-12 text-center shadow-md">
+              <p className="text-gray-500 dark:text-gray-400 text-sm mb-1">No predictors yet.</p>
+              <p className="text-xs text-gray-400">Create a profile via <strong className="text-[#7A7FEE]">Post Trade</strong> to be the first on the leaderboard.</p>
+            </div>
           ) : (
             <div className="card overflow-hidden shadow-md">
-              {!isLive && (
-                <div className="px-4 py-2 bg-[#f59e0b]/10 border-b border-[#f59e0b]/20 text-[#f59e0b] text-xs font-medium">
-                  Demo data — no on-chain profiles found yet. Create a profile to appear here.
-                </div>
-              )}
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react"
 import { X, TrendingUp, TrendingDown, Lock, CheckCircle, Loader2 } from "lucide-react"
+import CoinLogo from "@/components/echo/coin-logo"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { useQuery } from "@tanstack/react-query"
 import { fetchActiveOracles, fetchOraclePrice, fetchManagers, formatStrike, formatExpiry, type OracleState } from "@/lib/predict-api"
@@ -77,7 +78,6 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
         const sorted = [...raw]
           .filter(o => o.expiry > now + 60_000) // must have at least 1 min left
           .sort((a, b) => a.expiry - b.expiry)
-          .slice(0, 4)
         setOracles(sorted)
         setSelectedOracleIdx(0)
         setStatus("idle")
@@ -264,7 +264,7 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
               {/* Live BTC price bar */}
               <div className="flex items-center justify-between rounded-xl bg-gray-50 dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700 px-4 py-2.5">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-6 h-6 rounded-full bg-[#f7931a]/15 flex items-center justify-center text-[#f7931a] text-xs font-bold">₿</div>
+                  <CoinLogo symbol="BTC" size={24} />
                   <div>
                     <p className="text-[10px] text-gray-400 leading-none mb-0.5">BTC / USD · Binance</p>
                     {livePrice ? (
@@ -305,7 +305,11 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
                   ]).map(({ d, Icon, label, active }) => (
                     <button key={d} onClick={() => setDirection(d)}
                       className={`flex flex-col items-center gap-2 rounded-xl border p-3 text-xs font-semibold transition-all ${direction === d ? active : "border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-300"}`}>
-                      <Icon className="w-5 h-5" />{label}
+                      <div className="flex items-center gap-1">
+                        <CoinLogo symbol="BTC" size={16} />
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -313,7 +317,9 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
 
               {/* Market / Expiry */}
               <div>
-                <label className="block text-sm font-medium text-black dark:text-white mb-2">Market & Expiry</label>
+                <label className="block text-sm font-medium text-black dark:text-white mb-2">
+                  Expiry Time <span className="text-xs text-gray-400 font-normal">— pick from available markets</span>
+                </label>
                 {status === "loading-markets" ? (
                   <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
                     <Loader2 className="w-4 h-4 animate-spin" /> Loading live markets…
@@ -321,18 +327,25 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
                 ) : oracles.length === 0 ? (
                   <p className="text-sm text-gray-500">No active markets found. Using demo mode.</p>
                 ) : (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
                     {oracles.map((o, i) => {
                       const spot = oracleSpots[o.oracle_id]
                       const strikeDisplay = spot
                         ? `$${(Math.round(spot / (o.tick_size > 0 ? o.tick_size : 1_000_000_000)) * (o.tick_size > 0 ? o.tick_size : 1_000_000_000) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
                         : formatStrike(o.min_strike)
+                      const expiryDate = new Date(o.expiry)
+                      const isToday = expiryDate.toDateString() === new Date().toDateString()
+                      const clockTime = expiryDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })
+                      const dateLabel = isToday ? `Today, ${clockTime}` : expiryDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ` ${clockTime}`
                       return (
-                      <button key={o.oracle_id} onClick={() => setSelectedOracleIdx(i)}
-                        className={`rounded-xl border p-3 text-left text-xs transition-all ${selectedOracleIdx === i ? "border-[#7A7FEE]/50 bg-[#7A7FEE]/10 text-[#7A7FEE]" : "border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-300"}`}>
-                        <div className="font-semibold">{formatExpiry(o.expiry)}</div>
-                        <div className="text-gray-500 mt-0.5">ATM {strikeDisplay}</div>
-                      </button>
+                        <button key={o.oracle_id} onClick={() => setSelectedOracleIdx(i)}
+                          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left text-sm transition-all ${selectedOracleIdx === i ? "border-[#7A7FEE]/50 bg-[#7A7FEE]/10" : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-500"}`}>
+                          <div>
+                            <span className={`font-semibold ${selectedOracleIdx === i ? "text-[#7A7FEE]" : "text-black dark:text-white"}`}>{dateLabel}</span>
+                            <span className="ml-2 text-xs text-gray-400">({formatExpiry(o.expiry)} left)</span>
+                          </div>
+                          <span className="text-xs text-gray-500">ATM {strikeDisplay}</span>
+                        </button>
                       )
                     })}
                   </div>

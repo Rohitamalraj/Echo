@@ -9,6 +9,7 @@ import { fetchAllProfiles, fetchSignalPolicies, buildPaySignalFeeTx, suiClient, 
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { useQuery } from "@tanstack/react-query"
 import { TrendingUp, TrendingDown, Loader2, RefreshCw, Copy, Lock, Unlock } from "lucide-react"
+import CoinLogo from "@/components/echo/coin-logo"
 import { fetchFromWalrus } from "@/lib/walrus"
 import { DUSDC_TYPE } from "@/lib/constants"
 import dynamic from "next/dynamic"
@@ -243,13 +244,14 @@ export default function FeedPage() {
                               <p className="text-xs text-gray-400">{timeAgo(pos.checkpoint_timestamp_ms)}</p>
                             </div>
                           </Link>
-                          <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1 ${
+                          <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 ${
                             pos.is_up
                               ? "bg-green-500/10 text-green-500 border border-green-500/20"
                               : "bg-red-500/10 text-red-500 border border-red-500/20"
                           }`}>
+                            <CoinLogo symbol="BTC" size={13} />
                             {pos.is_up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                            BTC {pos.is_up ? "UP" : "DOWN"}
+                            {pos.is_up ? "UP" : "DOWN"}
                           </span>
                         </div>
 
