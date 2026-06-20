@@ -4,7 +4,7 @@ import { useState } from "react"
 import Link from "next/link"
 import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
-import { fetchFollowerCopies, fetchAllProfiles, buildSettleCopyTx, buildRedeemOwnTradeTx, buildWithdrawFromManagerTx } from "@/lib/sui-client"
+import { fetchFollowerCopies, fetchCopySettledEvents, fetchAllProfiles, buildSettleCopyTx, buildRedeemOwnTradeTx, buildWithdrawFromManagerTx } from "@/lib/sui-client"
 import { fetchManagers, fetchManagerSummary, fetchManagerPositions, fetchAllOracles, type ManagerSummary } from "@/lib/predict-api"
 import { DUSDC_DECIMALS, MIN_QUANTITY } from "@/lib/constants"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
@@ -107,11 +107,24 @@ export default function PortfolioPage() {
     enabled: !!account?.address,
   })
 
+  // Track which copy records already had settle_copy called (to show Settled vs Claim)
+  const { data: settledCopyEvents } = useQuery({
+    queryKey: ["settled-copy-events", account?.address],
+    queryFn: () => fetchCopySettledEvents(200),
+    enabled: !!account?.address,
+    staleTime: 30_000,
+  })
+
   const isLoading = managerLoading || summaryLoading || copyLoading || positionsLoading
   const isLive = !!managerData && !!managerSummary
   // Key-based lookup: redeem tx digests differ from mint tx digests, so match by position identity
   const redeemedKeys = new Set(
     (managerPositions?.redeemed ?? []).map(p => `${p.oracle_id}:${p.strike}:${p.expiry}:${p.is_up}`)
+  )
+  const settledCopyRecordIds = new Set(
+    (settledCopyEvents?.data ?? [])
+      .filter(e => (e.parsedJson as { follower: string }).follower === account?.address)
+      .map(e => (e.parsedJson as { copy_record_id: string }).copy_record_id)
   )
 
   // Build copy events display
@@ -164,6 +177,7 @@ export default function PortfolioPage() {
         : oracle.settlement_price < pos.strike
       const quantity = BigInt(Math.max(pos.amountDusd, Number(MIN_QUANTITY)))
       const payoutAmount = won ? quantity : 0n
+      const alreadyRedeemed = redeemedKeys.has(`${pos.oracleId}:${pos.strike}:${pos.expiryMs}:${pos.isUp}`)
 
       const tx = buildSettleCopyTx({
         copyRecordId: pos.id,
@@ -176,11 +190,12 @@ export default function PortfolioPage() {
         quantity,
         payoutAmount,
         won,
+        alreadyRedeemed,
       })
       await signAndExecute({ transaction: tx })
-      // Invalidate queries to refresh portfolio
       queryClient.invalidateQueries({ queryKey: ["follower-copies"] })
       queryClient.invalidateQueries({ queryKey: ["manager-summary"] })
+      queryClient.invalidateQueries({ queryKey: ["settled-copy-events"] })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setSettleError(msg.slice(0, 100))
@@ -539,7 +554,9 @@ export default function PortfolioPage() {
                               )}
                             </td>
                             <td className="p-4">
-                              {isSettled ? (
+                              {settledCopyRecordIds.has(pos.id) ? (
+                                <span className="text-xs text-gray-400">{won ? "Settled" : "—"}</span>
+                              ) : isSettled && won === true ? (
                                 <button
                                   onClick={() => handleSettle(pos)}
                                   disabled={settlingId === pos.id}

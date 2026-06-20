@@ -364,8 +364,12 @@ export function buildCreateSignalTx(params: {
 
 /** Build a PTB to settle a copy and enforce 85/15 split.
  *
- *  Steps:
- *  1. predict::redeem_permissionless → payout into manager balance
+ *  settle_copy handles both won and lost cases internally and calls record_settlement.
+ *  For won trades: redeem (unless bot already did) → withdraw → settle_copy.
+ *  For lost trades: create a zero coin → settle_copy (which calls coin::destroy_zero).
+ *
+ *  Steps (won):
+ *  1. predict::redeem_permissionless (skipped if alreadyRedeemed)
  *  2. predict_manager::withdraw      → Coin<DUSD>
  *  3. echo::copy_trade::settle_copy  → split 85/15, emit CopySettled
  */
@@ -380,75 +384,52 @@ export function buildSettleCopyTx(params: {
   quantity: bigint;
   payoutAmount: bigint;
   won: boolean;
+  alreadyRedeemed: boolean;
 }): Transaction {
   const {
-    copyRecordId,
-    predictorProfileId,
-    managerObjectId,
-    oracleId,
-    strike,
-    isUp,
-    expiryMs,
-    quantity,
-    payoutAmount,
-    won,
+    copyRecordId, predictorProfileId, managerObjectId,
+    oracleId, strike, isUp, expiryMs, quantity, payoutAmount, won, alreadyRedeemed,
   } = params;
 
   const tx = new Transaction();
+  let payoutCoin: ReturnType<typeof tx.moveCall>[0];
 
   if (won) {
-    // Win path: redeem → withdraw → settle_copy (85/15 split) → record_settlement
-    const marketKey = tx.moveCall({
-      target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
-      arguments: [
-        tx.pure.id(oracleId),
-        tx.pure.u64(expiryMs),
-        tx.pure.u64(strike),
-      ],
-    });
-
-    tx.moveCall({
-      target: `${PREDICT_PACKAGE_ID}::predict::redeem_permissionless`,
-      typeArguments: [DUSDC_TYPE],
-      arguments: [
-        tx.object(PREDICT_OBJECT_ID),
-        tx.object(managerObjectId),
-        tx.object(oracleId),
-        marketKey,
-        tx.pure.u64(quantity),
-        tx.object("0x6"),
-      ],
-    });
-
-    const [payoutCoin] = tx.moveCall({
+    if (!alreadyRedeemed) {
+      const marketKey = tx.moveCall({
+        target: `${PREDICT_PACKAGE_ID}::market_key::${isUp ? "up" : "down"}`,
+        arguments: [tx.pure.id(oracleId), tx.pure.u64(expiryMs), tx.pure.u64(strike)],
+      });
+      tx.moveCall({
+        target: `${PREDICT_PACKAGE_ID}::predict::redeem_permissionless`,
+        typeArguments: [DUSDC_TYPE],
+        arguments: [
+          tx.object(PREDICT_OBJECT_ID), tx.object(managerObjectId),
+          tx.object(oracleId), marketKey, tx.pure.u64(quantity), tx.object("0x6"),
+        ],
+      });
+    }
+    [payoutCoin] = tx.moveCall({
       target: `${PREDICT_PACKAGE_ID}::predict_manager::withdraw`,
       typeArguments: [DUSDC_TYPE],
-      arguments: [
-        tx.object(managerObjectId),
-        tx.pure.u64(payoutAmount),
-      ],
+      arguments: [tx.object(managerObjectId), tx.pure.u64(payoutAmount)],
     });
-
-    tx.moveCall({
-      target: `${ECHO_PACKAGE_ID}::copy_trade::settle_copy`,
+  } else {
+    // Lost: pass zero coin — settle_copy calls coin::destroy_zero internally
+    [payoutCoin] = tx.moveCall({
+      target: "0x2::coin::zero",
       typeArguments: [DUSDC_TYPE],
-      arguments: [
-        tx.object(copyRecordId),
-        payoutCoin,
-        tx.object(predictorProfileId),
-        tx.object("0x6"),
-      ],
     });
   }
 
-  // Always record settlement on predictor's profile to update win_rate / streak
+  // settle_copy handles the 85/15 split and calls record_settlement internally
   tx.moveCall({
-    target: `${ECHO_PACKAGE_ID}::predictor_profile::record_settlement`,
+    target: `${ECHO_PACKAGE_ID}::copy_trade::settle_copy`,
+    typeArguments: [DUSDC_TYPE],
     arguments: [
+      tx.object(copyRecordId),
+      payoutCoin,
       tx.object(predictorProfileId),
-      tx.pure.bool(won),
-      tx.pure.u64(won ? payoutAmount : 0n),
-      tx.pure.u64(quantity),
       tx.object("0x6"),
     ],
   });
@@ -559,10 +540,14 @@ export async function fetchSignalPolicies(
     .map((e) => {
       const j = e.parsedJson as {
         policy_id: string;
-        blob_id: string;
+        blob_id: string | number[];
         fee_dusd: string;
       };
-      return { objectId: j.policy_id, blobId: j.blob_id, feeDusd: j.fee_dusd };
+      // blob_id is stored as UTF-8 bytes (vector<u8>); decode back to string
+      const blobId = Array.isArray(j.blob_id)
+        ? new TextDecoder().decode(new Uint8Array(j.blob_id as number[]))
+        : j.blob_id;
+      return { objectId: j.policy_id, blobId, feeDusd: j.fee_dusd };
     });
 }
 
@@ -578,13 +563,12 @@ export function buildPaySignalFeeTx(params: {
     tx.pure.u64(params.feeDusd),
   ]);
   tx.moveCall({
-    target: `${ECHO_PACKAGE_ID}::seal_signal::pay_fee`,
+    target: `${ECHO_PACKAGE_ID}::seal_signal::pay_signal_fee`,
     typeArguments: [DUSDC_TYPE],
     arguments: [
       tx.object(params.signalPolicyObjectId),
       tx.object(params.predictorProfileObjectId),
       feeCoin,
-      tx.object("0x6"),
     ],
   });
   return tx;
