@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { X, TrendingUp, TrendingDown, Lock, CheckCircle, Loader2 } from "lucide-react"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { useQuery } from "@tanstack/react-query"
@@ -32,6 +32,31 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
   const [errorMsg, setErrorMsg] = useState("")
   const [txDigest, setTxDigest] = useState("")
   const [reasoningBlobId, setReasoningBlobId] = useState<string | null>(null)
+
+  // Live Binance price inside modal
+  const [livePrice, setLivePrice] = useState<{ price: number; changePct: number; flash: "up" | "down" | null } | null>(null)
+  const livePriceRef = useRef<number | null>(null)
+
+  const fetchLive = useCallback(async () => {
+    try {
+      const r = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", { cache: "no-store" })
+      const d = await r.json()
+      const price = parseFloat(d.lastPrice)
+      const changePct = parseFloat(d.priceChangePercent)
+      const prev = livePriceRef.current
+      const flash = prev !== null ? (price > prev ? "up" : price < prev ? "down" : null) : null
+      livePriceRef.current = price
+      setLivePrice({ price, changePct, flash })
+      if (flash) setTimeout(() => setLivePrice(p => p ? { ...p, flash: null } : p), 600)
+    } catch { /* silent */ }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    fetchLive()
+    const id = setInterval(fetchLive, 10_000)
+    return () => clearInterval(id)
+  }, [open, fetchLive])
 
   // Fetch the user's Echo profile to get the profile object ID for SEAL signals
   const { data: profiles } = useQuery({
@@ -158,15 +183,34 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
           setReasoningBlobId(blobId)
           localStorage.setItem(`echo_reasoning_${result.digest}`, blobId)
 
-          // If premium: create SEAL encrypted signal policy
+          // If premium: create SEAL signal policy on-chain
           if (isPremium && myProfileId) {
-            setErrorMsg("Creating SEAL encrypted signal…")
+            setErrorMsg("Creating SEAL signal policy — approve wallet…")
             const signalTx = buildCreateSignalTx({
               profileObjectId: myProfileId,
               blobId,
               feeDusd: parseDusd(signalFee),
             })
-            await signAndExecute({ transaction: signalTx })
+            const signalResult = await signAndExecute({ transaction: signalTx })
+            // Capture the SignalPolicy object ID from effects so followers can pay to unlock
+            const created = (signalResult as { effects?: { created?: { reference: { objectId: string } }[] } })
+              .effects?.created
+            const policyObjectId = created?.[0]?.reference?.objectId
+            if (policyObjectId) {
+              // Store policy metadata so the feed can show "Unlock" buttons
+              localStorage.setItem(`echo_signal_${result.digest}`, JSON.stringify({
+                policyObjectId,
+                blobId,
+                feeDusd: signalFee,
+                isPremium: true,
+              }))
+            }
+          } else {
+            // Public reasoning — just store the blob ID for display
+            localStorage.setItem(`echo_signal_${result.digest}`, JSON.stringify({
+              blobId,
+              isPremium: false,
+            }))
           }
         } catch {
           // Non-fatal — trade succeeded, reasoning upload failed
@@ -206,14 +250,48 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
         ) : (
           <>
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 p-6">
-              <div>
-                <h2 className="text-lg font-semibold text-black dark:text-white">Post a Trade</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Share your prediction and earn from followers</p>
+            <div className="border-b border-gray-200 dark:border-gray-700 p-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-black dark:text-white">Post a Trade</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Share your prediction and earn from followers</p>
+                </div>
+                <button onClick={() => onOpenChange(false)} className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 p-1.5 rounded-full transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button onClick={() => onOpenChange(false)} className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 p-1.5 rounded-full transition-colors">
-                <X className="w-4 h-4" />
-              </button>
+
+              {/* Live BTC price bar */}
+              <div className="flex items-center justify-between rounded-xl bg-gray-50 dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700 px-4 py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-6 h-6 rounded-full bg-[#f7931a]/15 flex items-center justify-center text-[#f7931a] text-xs font-bold">₿</div>
+                  <div>
+                    <p className="text-[10px] text-gray-400 leading-none mb-0.5">BTC / USD · Binance</p>
+                    {livePrice ? (
+                      <p className={`text-base font-bold tabular-nums transition-colors duration-300 ${
+                        livePrice.flash === "up" ? "text-green-500" : livePrice.flash === "down" ? "text-red-500" : "text-black dark:text-white"
+                      }`}>
+                        ${livePrice.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-gray-400 animate-pulse">Loading…</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {livePrice && (
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
+                      livePrice.changePct >= 0 ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"
+                    }`}>
+                      {livePrice.changePct >= 0 ? "+" : ""}{livePrice.changePct.toFixed(2)}% 24h
+                    </span>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                    <span className="text-[10px] text-green-500 font-medium">LIVE</span>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="p-6 space-y-5">

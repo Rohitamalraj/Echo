@@ -5,12 +5,16 @@ import Link from "next/link"
 import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
 import { fetchMintedPositions, type PositionMinted } from "@/lib/predict-api"
-import { fetchAllProfiles, type PredictorProfileFields } from "@/lib/sui-client"
+import { fetchAllProfiles, fetchSignalPolicies, buildPaySignalFeeTx, suiClient, type PredictorProfileFields } from "@/lib/sui-client"
+import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { useQuery } from "@tanstack/react-query"
-import { TrendingUp, TrendingDown, Loader2, RefreshCw, Copy } from "lucide-react"
+import { TrendingUp, TrendingDown, Loader2, RefreshCw, Copy, Lock, Unlock } from "lucide-react"
+import { fetchFromWalrus } from "@/lib/walrus"
+import { DUSDC_TYPE } from "@/lib/constants"
 import dynamic from "next/dynamic"
 
 const CopyModal = dynamic(() => import("@/components/echo/copy-modal"), { ssr: false })
+const BtcTicker = dynamic(() => import("@/components/echo/btc-ticker"), { ssr: false })
 
 function timeAgo(ms: number): string {
   const diff = Date.now() - ms
@@ -43,7 +47,12 @@ function impliedProb(askPrice: number): number {
 }
 
 export default function FeedPage() {
+  const account = useCurrentAccount()
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
   const [copyTarget, setCopyTarget] = useState<PositionMinted | null>(null)
+  // blobId → text content once fetched from Walrus
+  const [revealedReasoning, setRevealedReasoning] = useState<Record<string, string>>({})
+  const [unlocking, setUnlocking] = useState<string | null>(null)
 
   const { data: positions, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["feed-positions"],
@@ -73,6 +82,58 @@ export default function FeedPage() {
     .filter(p => p.expiry <= Date.now())
     .sort((a, b) => b.checkpoint_timestamp_ms - a.checkpoint_timestamp_ms)
     .slice(0, 20)
+
+  // Fetch signal metadata from localStorage (set by post-trade-modal after upload)
+  function getSignalMeta(txDigest: string): { blobId?: string; policyObjectId?: string; feeDusd?: string; isPremium: boolean } | null {
+    try {
+      const raw = localStorage.getItem(`echo_signal_${txDigest}`)
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  }
+
+  async function handleReveal(blobId: string) {
+    if (revealedReasoning[blobId]) return
+    try {
+      const text = await fetchFromWalrus(blobId)
+      setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+    } catch {
+      setRevealedReasoning(prev => ({ ...prev, [blobId]: "(failed to load)" }))
+    }
+  }
+
+  async function handleUnlock(policyObjectId: string, predictorAddress: string, blobId: string, feeDusd: string) {
+    if (!account) return
+    setUnlocking(policyObjectId)
+    try {
+      // Find predictor profile and a dUSDC coin
+      const [policies, coins] = await Promise.all([
+        fetchSignalPolicies(predictorAddress),
+        suiClient.getCoins({ owner: account.address, coinType: DUSDC_TYPE }),
+      ])
+      const policy = policies.find(p => p.objectId === policyObjectId)
+      if (!policy || !coins.data.length) throw new Error("Cannot unlock")
+      // Find predictor's profile object ID
+      const profiles = await fetchAllProfiles()
+      const predProfile = profiles.find(p => p.wallet.toLowerCase() === predictorAddress.toLowerCase())
+      if (!predProfile) throw new Error("Predictor has no Echo profile")
+      const predProfileId = (predProfile.id as unknown as { id: string }).id
+      const tx = buildPaySignalFeeTx({
+        signalPolicyObjectId: policyObjectId,
+        predictorProfileObjectId: predProfileId,
+        dusdCoinObjectId: coins.data[0].coinObjectId,
+        feeDusd: BigInt(Math.round(Number(feeDusd) * 1e6)),
+      })
+      await signAndExecute({ transaction: tx })
+      // After payment, fetch the blob content
+      const text = await fetchFromWalrus(blobId)
+      setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setRevealedReasoning(prev => ({ ...prev, [blobId]: `Error: ${msg.slice(0, 80)}` }))
+    } finally {
+      setUnlocking(null)
+    }
+  }
 
   // Convert a PositionMinted → ActiveTrade shape for CopyModal
   function toActiveTrade(pos: PositionMinted) {
@@ -119,8 +180,11 @@ export default function FeedPage() {
 
       <div className="container pt-4 pb-20">
         <section className="my-8">
+          {/* Live BTC Price Ticker */}
+          <BtcTicker />
+
           {/* Title */}
-          <div className="flex items-start justify-between mb-8 gap-4 flex-wrap">
+          <div className="flex items-start justify-between mb-8 gap-4 flex-wrap mt-8">
             <div>
               <h1 className="text-black dark:text-white mb-2 text-3xl md:text-4xl lg:text-5xl font-medium leading-tight">
                 Live Trade
@@ -223,13 +287,58 @@ export default function FeedPage() {
                           </div>
                         </div>
 
-                        {/* Copy button */}
-                        <button
-                          onClick={() => setCopyTarget(pos)}
-                          className="btn-primary w-full text-sm flex items-center justify-center gap-2"
-                        >
-                          <Copy className="w-3.5 h-3.5" /> Copy Trade
-                        </button>
+                        {/* Reasoning / SEAL unlock section */}
+                        {(() => {
+                          const signal = getSignalMeta(pos.digest)
+                          if (!signal) return null
+                          const revealed = signal.blobId ? revealedReasoning[signal.blobId] : undefined
+                          if (signal.isPremium && signal.policyObjectId && !revealed) {
+                            return (
+                              <button
+                                onClick={() => handleUnlock(signal.policyObjectId!, pos.trader, signal.blobId!, signal.feeDusd ?? "0.5")}
+                                disabled={unlocking === signal.policyObjectId}
+                                className="w-full flex items-center justify-center gap-2 text-xs py-2 rounded-lg border border-purple-400/30 bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 transition-colors disabled:opacity-50"
+                              >
+                                {unlocking === signal.policyObjectId
+                                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Unlocking…</>
+                                  : <><Lock className="w-3 h-3" /> Unlock reasoning · {signal.feeDusd} dUSDC</>}
+                              </button>
+                            )
+                          }
+                          if (revealed) {
+                            return (
+                              <div className="rounded-lg bg-gray-50 dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs text-gray-700 dark:text-gray-300 italic">
+                                <span className="text-[10px] text-gray-400 not-italic block mb-1 flex items-center gap-1"><Unlock className="w-2.5 h-2.5" /> Reasoning</span>
+                                "{revealed}"
+                              </div>
+                            )
+                          }
+                          if (!signal.isPremium && signal.blobId && !revealed) {
+                            return (
+                              <button
+                                onClick={() => handleReveal(signal.blobId!)}
+                                className="w-full text-xs py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 hover:text-[#7A7FEE] hover:border-[#7A7FEE] transition-colors"
+                              >
+                                View reasoning
+                              </button>
+                            )
+                          }
+                          return null
+                        })()}
+
+                        {/* Copy button — hidden for your own trades */}
+                        {pos.trader.toLowerCase() === account?.address?.toLowerCase() ? (
+                          <div className="w-full py-2 text-center text-xs text-gray-400 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                            Your trade
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setCopyTarget(pos)}
+                            className="btn-primary w-full text-sm flex items-center justify-center gap-2"
+                          >
+                            <Copy className="w-3.5 h-3.5" /> Copy Trade
+                          </button>
+                        )}
                       </div>
                     )
                   })}
