@@ -28,25 +28,27 @@ The demand side is proven. The on-chain supply side doesn't exist. Echo is the f
 
 ### 1. Predictor Payouts Depend on Trust
 
-In early 2024, a BTC signals provider with 80,000 subscribers charged $199/month for directional calls. When an independent on-chain analyst traced the provider's disclosed wallet, it showed the wallet had opened positions an average of 4 minutes before each signal broadcast — front-running their own subscribers. The provider extracted an estimated $1.2M from the timing edge alone. Subscribers averaged a 34% win rate on signals they paid for. There was no contract, no refund mechanism, no recourse.
+When a follower wins by copying a signal, the payout split relies entirely on the provider choosing to send money. There is no contract — just a wallet address and a promise. Providers control timing, reporting, and disbursement; followers have zero leverage.
 
-This is the structure of every centralized signal business: the provider controls the timing of broadcasts, controls win-rate reporting, and controls the payout flow. The follower is a counterparty with no leverage.
+> *Telegram signal groups with 80K+ paid subscribers routinely front-run their own broadcasts — opening positions before sending signals — with no accountability mechanism for followers.*
 
-**Echo's fix:** The predictor posts the trade on-chain *first*. The `CopyRecord` is created atomically with the position mint — there is no gap to front-run. The predictor's 15% cut is encoded in `copy_trade::settle_copy` and cannot be changed, withheld, or rerouted. It is a PTB constraint, not a promise.
+**Echo's fix:** The predictor's 15% cut is encoded in `copy_trade::settle_copy` — computed and transferred atomically in the same PTB as the follower's payout. It cannot be withheld, rerouted, or changed. No trust required.
 
 ### 2. Win Rates Are Self-Reported
 
-eToro's Popular Investor program displays win rates prominently — but those rates are computed by eToro, using eToro's definition, on eToro's servers. Independent research published in 2024 found that top-performing copy accounts showed 71% win rates on the leaderboard while their copy-followers experienced 54% median returns on the same signals — a 17-point gap explained by copy delay, slippage, and favorable backcalculation.
+Every copy-trading platform computes win rates on its own servers, using its own methodology. The number displayed is whatever the platform chooses to show — not a verifiable on-chain record. Followers copy based on metrics they cannot audit.
 
-On Polymarket, there is no "trader profile" at all. Markets resolve, payouts go out, and there is no persistent identity that accumulates a verifiable track record over time.
+> *eToro's top Popular Investors show 71% win rates on their profiles while copy-followers experience ~54% median returns on the same signals — a gap the platform controls entirely.*
 
-**Echo's fix:** `PredictorProfile.win_rate_bps` is computed from settled `CopyRecord` objects on-chain — not from any off-chain database. Every update runs inside `settle_copy`, the same PTB that transfers the money. The stats displayed in Echo's feed are the stats written to the chain at settlement. There is nothing to game.
+**Echo's fix:** `PredictorProfile.win_rate_bps` is updated inside `settle_copy` — the same transaction that moves money. Every stat in Echo's feed is read directly from on-chain objects. There is nothing to game.
 
-### 3. Signal Decryption Has No Accountability Layer
+### 3. Signal Providers Have No Skin in the Game
 
-Premium signal providers sell access — Telegram groups at $99/month, newsletters at $299/year. The signal goes out. The trade wins or loses. The provider's wallet is not linked to the recommendation. There is no cryptographic proof the provider was even in the trade.
+Paid signal services charge upfront — $99/month, $299/year — with no cryptographic proof the provider was ever in the trade they recommended. The signal goes out, the trade wins or loses, and the provider's wallet is completely unlinked.
 
-**Echo's fix:** SEAL encryption creates a verifiable link between the encrypted reasoning and the on-chain position. The `SignalPolicy` shared object stores the `blobId` of the encrypted signal blob and the unlock fee. `seal_approve` only releases the decryption key after verifying on-chain that the requester paid into the exact policy tied to the exact trade. If the predictor did not open the position on DeepBook first, the policy object does not exist — there is nothing to decrypt, and nothing to sell.
+> *A Polymarket whale can post public "analysis" on X, have 50,000 followers act on it, and hold the opposite position on-chain — with zero on-chain proof of intent either way.*
+
+**Echo's fix:** A predictor cannot attach a SEAL signal to a trade they didn't open. The `SignalPolicy` is tied to a specific `oracle_id + expiry + strike` tuple that must already exist on DeepBook. No position, no policy, nothing to sell.
 
 ---
 
