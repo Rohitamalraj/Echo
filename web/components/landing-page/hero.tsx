@@ -1,6 +1,7 @@
 import Image from "next/image"
 import Link from "next/link"
 import HeroConnectButton from "./hero-connect-button"
+import Ticker from "./ticker"
 
 export default function Hero() {
   return (
@@ -33,11 +34,11 @@ export default function Hero() {
           </div>
 
           {/* Trust strip */}
-          <div className="flex flex-wrap items-center gap-4 mt-8 pt-8 border-t border-gray-200 dark:border-gray-800">
+          <div className="flex flex-wrap items-center gap-6 mt-8 pt-8 border-t border-gray-200 dark:border-gray-800">
             {[
-              { label: "85/15 Split", sub: "on-chain enforced" },
-              { label: "0 Middlemen", sub: "fully trustless" },
-              { label: "Instant Copy", sub: "one transaction" },
+              { label: "85/15 Split",   sub: "on-chain enforced" },
+              { label: "0 Middlemen",   sub: "fully trustless"   },
+              { label: "Instant Copy",  sub: "one transaction"   },
             ].map(s => (
               <div key={s.label}>
                 <p className="text-sm font-semibold text-black dark:text-white">{s.label}</p>
@@ -57,6 +58,11 @@ export default function Hero() {
             className="w-full h-full object-cover object-left opacity-20 md:opacity-100"
           />
         </div>
+      </div>
+
+      {/* Ticker — full-width strip at the bottom of the hero card */}
+      <div className="border-t border-gray-200 dark:border-gray-800">
+        <Ticker />
       </div>
     </section>
   )
