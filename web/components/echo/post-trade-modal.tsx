@@ -197,11 +197,10 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
             const policyObjectId = signalTxFull.effects?.created?.[0]?.reference?.objectId
 
             if (policyObjectId) {
-              // Step 2: Encrypt reasoning with SEAL using the policy as namespace,
-              //         then upload CIPHERTEXT (not plaintext) to Walrus.
+              // Step 2: Encrypt direction + reasoning with SEAL, upload ciphertext to Walrus.
               setErrorMsg("Encrypting & uploading to Walrus…")
               const { blobId, sealId } = await encryptAndUpload(
-                reasoning.trim(),
+                JSON.stringify({ direction, reasoning: reasoning.trim() }),
                 policyObjectId,
                 suiClient,
               )

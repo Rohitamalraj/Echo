@@ -53,8 +53,8 @@ export default function FeedPage() {
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage()
   const [copyTarget, setCopyTarget] = useState<PositionMinted | null>(null)
-  // blobId → text content once fetched from Walrus
-  const [revealedReasoning, setRevealedReasoning] = useState<Record<string, string>>({})
+  // blobId → decrypted payload (direction + reasoning, or plain text for legacy)
+  const [revealedReasoning, setRevealedReasoning] = useState<Record<string, { direction?: "UP" | "DOWN"; reasoning: string }>>({})
   const [unlocking, setUnlocking] = useState<string | null>(null)
 
   const { data: positions, isLoading, refetch, isFetching } = useQuery({
@@ -100,14 +100,21 @@ export default function FeedPage() {
     } catch { return null }
   }
 
-  // Public reasoning: plain text blob, just fetch from Walrus
+  function parseSignalPayload(raw: string): { direction?: "UP" | "DOWN"; reasoning: string } {
+    try {
+      const p = JSON.parse(raw)
+      if (typeof p.reasoning === "string") return { direction: p.direction, reasoning: p.reasoning }
+    } catch { /* plain text fallback */ }
+    return { reasoning: raw }
+  }
+
   async function handleReveal(blobId: string) {
     if (revealedReasoning[blobId]) return
     try {
       const text = await fetchFromWalrus(blobId)
-      setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+      setRevealedReasoning(prev => ({ ...prev, [blobId]: parseSignalPayload(text) }))
     } catch {
-      setRevealedReasoning(prev => ({ ...prev, [blobId]: "(failed to load)" }))
+      setRevealedReasoning(prev => ({ ...prev, [blobId]: { reasoning: "(failed to load)" } }))
     }
   }
 
@@ -158,18 +165,17 @@ export default function FeedPage() {
             return { signature: result.signature }
           },
         })
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: parseSignalPayload(text) }))
       } else {
-        // Legacy plain-text blob
         const text = await fetchFromWalrus(blobId)
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: parseSignalPayload(text) }))
       }
     } catch (e) {
       if (e instanceof NoAccessError) {
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: "Access denied — payment may not be confirmed yet. Try again in a moment." }))
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: { reasoning: "Access denied — payment may not be confirmed yet. Try again in a moment." } }))
       } else {
         const msg = e instanceof Error ? e.message : String(e)
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: `Error: ${msg.slice(0, 80)}` }))
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: { reasoning: `Error: ${msg.slice(0, 80)}` } }))
       }
     } finally {
       setUnlocking(null)
@@ -270,6 +276,10 @@ export default function FeedPage() {
                     const initials = (profile?.display_name ?? pos.trader.slice(2, 4)).slice(0, 2).toUpperCase()
                     const prob = impliedProb(pos.ask_price)
                     const expired = pos.expiry <= Date.now()
+                    const isOwn = pos.trader.toLowerCase() === account?.address?.toLowerCase()
+                    const signalForBadge = getSignalMeta(pos.digest)
+                    const revealedForBadge = signalForBadge?.blobId ? revealedReasoning[signalForBadge.blobId] : undefined
+                    const isDirectionLocked = !!signalForBadge?.isPremium && !revealedForBadge && !isOwn
 
                     return (
                       <div key={pos.digest + i} className="card p-5 shadow-md hover:shadow-lg transition-shadow duration-200 flex flex-col gap-4">
@@ -284,15 +294,21 @@ export default function FeedPage() {
                               <p className="text-xs text-gray-400">{timeAgo(pos.checkpoint_timestamp_ms)}</p>
                             </div>
                           </Link>
-                          <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 ${
-                            pos.is_up
-                              ? "bg-green-500/10 text-green-500 border border-green-500/20"
-                              : "bg-red-500/10 text-red-500 border border-red-500/20"
-                          }`}>
-                            <CoinLogo symbol="BTC" size={13} />
-                            {pos.is_up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                            {pos.is_up ? "UP" : "DOWN"}
-                          </span>
+                          {isDirectionLocked ? (
+                            <span className="text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 bg-purple-500/10 text-purple-500 border border-purple-500/20">
+                              <Lock className="w-3 h-3" /> Premium
+                            </span>
+                          ) : (
+                            <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 ${
+                              pos.is_up
+                                ? "bg-green-500/10 text-green-500 border border-green-500/20"
+                                : "bg-red-500/10 text-red-500 border border-red-500/20"
+                            }`}>
+                              <CoinLogo symbol="BTC" size={13} />
+                              {pos.is_up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                              {pos.is_up ? "UP" : "DOWN"}
+                            </span>
+                          )}
                         </div>
 
                         {/* Trade details */}
@@ -329,29 +345,42 @@ export default function FeedPage() {
                           </div>
                         </div>
 
-                        {/* Reasoning / SEAL unlock section */}
+                        {/* SEAL Premium / Reasoning section */}
                         {(() => {
                           const signal = getSignalMeta(pos.digest)
                           if (!signal) return null
                           const revealed = signal.blobId ? revealedReasoning[signal.blobId] : undefined
-                          if (signal.isPremium && signal.policyObjectId && !revealed) {
+                          const isOwn = pos.trader.toLowerCase() === account?.address?.toLowerCase()
+                          const isLocked = signal.isPremium && !revealed && !isOwn
+
+                          if (isLocked && signal.policyObjectId) {
                             return (
                               <button
                                 onClick={() => handleUnlock(signal.policyObjectId!, pos.trader, signal.blobId!, signal.sealId, signal.feeDusd ?? "0.5")}
                                 disabled={unlocking === signal.policyObjectId}
-                                className="w-full flex items-center justify-center gap-2 text-xs py-2 rounded-lg border border-purple-400/30 bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 transition-colors disabled:opacity-50"
+                                className="w-full flex items-center justify-center gap-2 text-sm py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-semibold transition-colors disabled:opacity-50"
                               >
                                 {unlocking === signal.policyObjectId
-                                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Unlocking…</>
-                                  : <><Lock className="w-3 h-3" /> Unlock reasoning · {signal.feeDusd} dUSDC</>}
+                                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Unlocking…</>
+                                  : <><Lock className="w-4 h-4" /> Unlock trade · {signal.feeDusd} dUSDC</>}
                               </button>
                             )
                           }
                           if (revealed) {
                             return (
-                              <div className="rounded-lg bg-gray-50 dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs text-gray-700 dark:text-gray-300 italic">
-                                <span className="text-[10px] text-gray-400 not-italic block mb-1 flex items-center gap-1"><Unlock className="w-2.5 h-2.5" /> Reasoning</span>
-                                "{revealed}"
+                              <div className="rounded-lg bg-purple-500/5 border border-purple-500/20 px-3 py-2.5 space-y-2">
+                                <span className="text-[10px] text-purple-400 flex items-center gap-1"><Unlock className="w-2.5 h-2.5" /> Unlocked Signal</span>
+                                {revealed.direction && (
+                                  <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${
+                                    revealed.direction === "UP"
+                                      ? "bg-green-500/10 text-green-500"
+                                      : "bg-red-500/10 text-red-500"
+                                  }`}>
+                                    {revealed.direction === "UP" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                    BTC {revealed.direction}
+                                  </span>
+                                )}
+                                <p className="text-xs text-gray-700 dark:text-gray-300 italic">&ldquo;{revealed.reasoning}&rdquo;</p>
                               </div>
                             )
                           }
@@ -368,8 +397,8 @@ export default function FeedPage() {
                           return null
                         })()}
 
-                        {/* Copy button — hidden for your own trades */}
-                        {pos.trader.toLowerCase() === account?.address?.toLowerCase() ? (
+                        {/* Copy button — always shown to followers (direction is on-chain public data) */}
+                        {isOwn ? (
                           <div className="w-full py-2 text-center text-xs text-gray-400 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
                             Your trade
                           </div>
