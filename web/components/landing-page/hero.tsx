@@ -5,12 +5,17 @@ import Ticker from "./ticker"
 
 export default function Hero() {
   return (
-    <section id="hero" className="card mt-1 mb-8 relative overflow-hidden shadow-md">
-      <div className="p-8 md:p-10 lg:p-14 flex flex-col md:flex-row items-start">
-        <div className="w-full md:w-3/5 z-10">
+    <section
+      id="hero"
+      className="card mt-1 mb-8 relative overflow-hidden shadow-md flex flex-col"
+      style={{ minHeight: "calc(100vh - 72px)" }}
+    >
+      {/* Main content — grows to push ticker to bottom */}
+      <div className="p-8 md:p-10 lg:p-14 flex flex-col md:flex-row items-start flex-1">
+        <div className="w-full md:w-3/5 z-10 flex flex-col justify-center h-full">
 
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#7A7FEE]/10 border border-[#7A7FEE]/20 text-[#7A7FEE] text-xs font-medium mb-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#7A7FEE]/10 border border-[#7A7FEE]/20 text-[#7A7FEE] text-xs font-medium mb-6 w-fit">
             <span className="w-1.5 h-1.5 rounded-full bg-[#7A7FEE] animate-pulse" />
             Live on Sui Testnet · Sui Overflow 2026
           </div>
@@ -32,7 +37,7 @@ export default function Hero() {
           </div>
 
           {/* Trust strip */}
-          <div className="flex flex-wrap items-center gap-6 mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+          <div className="flex flex-wrap items-center gap-6 mt-10 pt-6 border-t border-gray-200 dark:border-gray-800">
             {[
               { label: "85/15 Split",  sub: "on-chain enforced" },
               { label: "0 Middlemen",  sub: "fully trustless"   },
@@ -58,8 +63,8 @@ export default function Hero() {
         </div>
       </div>
 
-      {/* Ticker — full-width strip directly below trust strip */}
-      <div className="border-t border-gray-200 dark:border-gray-800 mx-0">
+      {/* Ticker — pinned to bottom of hero */}
+      <div className="border-t border-gray-200 dark:border-gray-800 mt-auto">
         <Ticker />
       </div>
     </section>
