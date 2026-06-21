@@ -1,3 +1,5 @@
+import Ticker from "./ticker"
+
 const highlights = [
   {
     value: "85 / 15",
@@ -40,6 +42,9 @@ export default function ProtocolStrip() {
           </div>
         ))}
       </div>
+
+      {/* Ticker */}
+      <Ticker />
 
       {/* Stack strip */}
       <div className="card px-6 py-3 shadow-sm flex flex-wrap items-center gap-2">
