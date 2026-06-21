@@ -26,29 +26,29 @@ The demand side is proven. The on-chain supply side doesn't exist. Echo is the f
 
 ## Three Layers of the Problem
 
-### 1. Predictor Payouts Depend on Trust
+### 1. Users Don't Know Who To Trust
 
-When a follower wins by copying a signal, the payout split relies entirely on the provider choosing to send money. There is no contract — just a wallet address and a promise. Providers control timing, reporting, and disbursement; followers have zero leverage.
+Retail participants in prediction markets have no native, verified way to find consistently profitable traders. There is no on-chain leaderboard, no verifiable track record, and no transparent proof of performance. Users fall back on Twitter threads, Telegram groups, and word-of-mouth — all of which are trivially gamed.
 
-> *Telegram signal groups with 80K+ paid subscribers routinely front-run their own broadcasts — opening positions before sending signals — with no accountability mechanism for followers.*
+> *A user who followed an anonymous "whale wallet" on Polymarket lost funds after the trader intentionally faded their own public positions — front-running followers with zero accountability.*
 
-**Echo's fix:** The predictor's 15% cut is encoded in `copy_trade::settle_copy` — computed and transferred atomically in the same PTB as the follower's payout. It cannot be withheld, rerouted, or changed. No trust required.
+**Echo's fix:** `PredictorProfile` accumulates win rate, streak, and earnings directly from settled on-chain outcomes. Every number in Echo's leaderboard is written by `settle_copy` — the same transaction that moves money. Nothing is self-reported.
 
-### 2. Win Rates Are Self-Reported
+### 2. Execution Is Manual and Painful
 
-Every copy-trading platform computes win rates on its own servers, using its own methodology. The number displayed is whatever the platform chooses to show — not a verifiable on-chain record. Followers copy based on metrics they cannot audit.
+Following a trader today means doing everything yourself — monitoring wallets, opening separate positions, managing timing, and tracking outcomes by hand. Prediction markets move fast; by the time a user spots a trade and replicates it, the window is gone. No prediction market platform has a native copy mechanism.
 
-> *eToro's top Popular Investors show 71% win rates on their profiles while copy-followers experience ~54% median returns on the same signals — a gap the platform controls entirely.*
+> *Polymarket, with over $25B in monthly volume, has zero built-in copy-trading or trader-following features. Users who want to follow a wallet have to watch it manually.*
 
-**Echo's fix:** `PredictorProfile.win_rate_bps` is updated inside `settle_copy` — the same transaction that moves money. Every stat in Echo's feed is read directly from on-chain objects. There is nothing to game.
+**Echo's fix:** One tap, one transaction. Echo's copy PTB atomically deposits, mints the position on DeepBook, and records the `CopyRecord` on-chain — all in a single Sui PTB. If any step fails, everything reverts.
 
-### 3. Signal Providers Have No Skin in the Game
+### 3. No Incentive for Good Traders to Share
 
-Paid signal services charge upfront — $99/month, $299/year — with no cryptographic proof the provider was ever in the trade they recommended. The signal goes out, the trade wins or loses, and the provider's wallet is completely unlinked.
+Skilled traders have no revenue model for sharing their edge. Posting your position publicly means others free-ride without compensating you. This keeps expert traders private and beginners blind — the social layer never develops, and value leaks entirely off-chain.
 
-> *A Polymarket whale can post public "analysis" on X, have 50,000 followers act on it, and hold the opposite position on-chain — with zero on-chain proof of intent either way.*
+> *On-chain analysts on Polymarket and Kalshi regularly build large followings on social media, but no platform pays them for their alpha or lets followers copy them in-app.*
 
-**Echo's fix:** A predictor cannot attach a SEAL signal to a trade they didn't open. The `SignalPolicy` is tied to a specific `oracle_id + expiry + strike` tuple that must already exist on DeepBook. No position, no policy, nothing to sell.
+**Echo's fix:** Predictors earn 15% of every follower's winning payout, enforced by `copy_trade::settle_copy`. They can also gate their reasoning behind a SEAL-encrypted signal with a custom unlock fee. Sharing is now a revenue stream, not a free handout.
 
 ---
 
