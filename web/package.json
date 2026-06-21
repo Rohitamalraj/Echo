@@ -12,6 +12,7 @@
     "@emotion/is-prop-valid": "latest",
     "@mysten/dapp-kit": "^1.1.1",
     "@mysten/dapp-kit-react": "^2.1.3",
+    "@mysten/seal": "^1.2.1",
     "@mysten/sui": "^2.19.0",
     "@remix-run/react": "latest",
     "@sveltejs/kit": "latest",

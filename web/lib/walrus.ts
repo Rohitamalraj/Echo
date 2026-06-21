@@ -2,7 +2,7 @@ import { WALRUS_PUBLISHER, WALRUS_AGGREGATOR } from "./constants"
 
 /** Upload text content to Walrus decentralised storage. Returns the blob ID. */
 export async function uploadToWalrus(content: string, epochs = 5): Promise<string> {
-  const res = await fetch(`${WALRUS_PUBLISHER}/v1/store?epochs=${epochs}`, {
+  const res = await fetch(`${WALRUS_PUBLISHER}/v1/blobs?epochs=${epochs}`, {
     method: "PUT",
     body: content,
     headers: { "Content-Type": "text/plain" },

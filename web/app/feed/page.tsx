@@ -6,11 +6,12 @@ import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
 import { fetchMintedPositions, type PositionMinted } from "@/lib/predict-api"
 import { fetchAllProfiles, fetchSignalPolicies, buildPaySignalFeeTx, suiClient, type PredictorProfileFields } from "@/lib/sui-client"
-import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
+import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage } from "@mysten/dapp-kit"
 import { useQuery } from "@tanstack/react-query"
 import { TrendingUp, TrendingDown, Loader2, RefreshCw, Copy, Lock, Unlock } from "lucide-react"
 import CoinLogo from "@/components/echo/coin-logo"
 import { fetchFromWalrus } from "@/lib/walrus"
+import { downloadAndDecryptSignal, NoAccessError } from "@/lib/seal"
 import { DUSDC_TYPE } from "@/lib/constants"
 import dynamic from "next/dynamic"
 
@@ -50,6 +51,7 @@ function impliedProb(askPrice: number): number {
 export default function FeedPage() {
   const account = useCurrentAccount()
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage()
   const [copyTarget, setCopyTarget] = useState<PositionMinted | null>(null)
   // blobId → text content once fetched from Walrus
   const [revealedReasoning, setRevealedReasoning] = useState<Record<string, string>>({})
@@ -84,14 +86,21 @@ export default function FeedPage() {
     .sort((a, b) => b.checkpoint_timestamp_ms - a.checkpoint_timestamp_ms)
     .slice(0, 20)
 
-  // Fetch signal metadata from localStorage (set by post-trade-modal after upload)
-  function getSignalMeta(txDigest: string): { blobId?: string; policyObjectId?: string; feeDusd?: string; isPremium: boolean } | null {
+  // Signal metadata stored in localStorage by post-trade-modal
+  function getSignalMeta(txDigest: string): {
+    blobId?: string
+    sealId?: string          // SEAL encrypted ID (needed for SEAL decrypt)
+    policyObjectId?: string
+    feeDusd?: string
+    isPremium: boolean
+  } | null {
     try {
       const raw = localStorage.getItem(`echo_signal_${txDigest}`)
       return raw ? JSON.parse(raw) : null
     } catch { return null }
   }
 
+  // Public reasoning: plain text blob, just fetch from Walrus
   async function handleReveal(blobId: string) {
     if (revealedReasoning[blobId]) return
     try {
@@ -102,20 +111,29 @@ export default function FeedPage() {
     }
   }
 
-  async function handleUnlock(policyObjectId: string, predictorAddress: string, blobId: string, feeDusd: string) {
+  // Premium reasoning:
+  //   1. Pay signal fee on-chain (adds wallet to SignalPolicy.paid_wallets)
+  //   2. SEAL key server verifies seal_approve, releases decryption key
+  //   3. Decrypt ciphertext locally with @mysten/seal SDK
+  async function handleUnlock(
+    policyObjectId: string,
+    predictorAddress: string,
+    blobId: string,
+    sealId: string | undefined,
+    feeDusd: string,
+  ) {
     if (!account) return
     setUnlocking(policyObjectId)
     try {
-      // Find predictor profile and a dUSDC coin
-      const [policies, coins] = await Promise.all([
+      // Step 1: Pay the signal fee on-chain
+      const [policies, coins, allProfs] = await Promise.all([
         fetchSignalPolicies(predictorAddress),
         suiClient.getCoins({ owner: account.address, coinType: DUSDC_TYPE }),
+        fetchAllProfiles(),
       ])
       const policy = policies.find(p => p.objectId === policyObjectId)
-      if (!policy || !coins.data.length) throw new Error("Cannot unlock")
-      // Find predictor's profile object ID
-      const profiles = await fetchAllProfiles()
-      const predProfile = profiles.find(p => p.wallet.toLowerCase() === predictorAddress.toLowerCase())
+      if (!policy || !coins.data.length) throw new Error("Cannot unlock — no policy or no dUSDC")
+      const predProfile = allProfs.find(p => p.wallet.toLowerCase() === predictorAddress.toLowerCase())
       if (!predProfile) throw new Error("Predictor has no Echo profile")
       const predProfileId = (predProfile.id as unknown as { id: string }).id
       const tx = buildPaySignalFeeTx({
@@ -125,12 +143,34 @@ export default function FeedPage() {
         feeDusd: BigInt(Math.round(Number(feeDusd) * 1e6)),
       })
       await signAndExecute({ transaction: tx })
-      // After payment, fetch the blob content
-      const text = await fetchFromWalrus(blobId)
-      setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+
+      // Step 2 & 3: If this was SEAL-encrypted, decrypt via SEAL SDK.
+      // Older signals uploaded as plain text fall back to a direct Walrus fetch.
+      if (sealId) {
+        const text = await downloadAndDecryptSignal({
+          blobId,
+          sealId,
+          policyObjectId,
+          suiClient,
+          currentAddress: account.address,
+          signPersonalMessage: async ({ message }) => {
+            const result = await signPersonalMessage({ message })
+            return { signature: result.signature }
+          },
+        })
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+      } else {
+        // Legacy plain-text blob
+        const text = await fetchFromWalrus(blobId)
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: text }))
+      }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setRevealedReasoning(prev => ({ ...prev, [blobId]: `Error: ${msg.slice(0, 80)}` }))
+      if (e instanceof NoAccessError) {
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: "Access denied — payment may not be confirmed yet. Try again in a moment." }))
+      } else {
+        const msg = e instanceof Error ? e.message : String(e)
+        setRevealedReasoning(prev => ({ ...prev, [blobId]: `Error: ${msg.slice(0, 80)}` }))
+      }
     } finally {
       setUnlocking(null)
     }
@@ -297,7 +337,7 @@ export default function FeedPage() {
                           if (signal.isPremium && signal.policyObjectId && !revealed) {
                             return (
                               <button
-                                onClick={() => handleUnlock(signal.policyObjectId!, pos.trader, signal.blobId!, signal.feeDusd ?? "0.5")}
+                                onClick={() => handleUnlock(signal.policyObjectId!, pos.trader, signal.blobId!, signal.sealId, signal.feeDusd ?? "0.5")}
                                 disabled={unlocking === signal.policyObjectId}
                                 className="w-full flex items-center justify-center gap-2 text-xs py-2 rounded-lg border border-purple-400/30 bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 transition-colors disabled:opacity-50"
                               >

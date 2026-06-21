@@ -26,10 +26,10 @@ export default function Hero() {
         {/* Image - hidden on mobile, visible on md and up */}
         <div className="hidden md:block md:w-2/5 md:absolute md:right-0 md:top-0 md:bottom-0 md:flex md:items-center">
           <Image
-            src="/purple-circle-wave-static.png"
-            alt="Purple Wave"
-            width={500}
-            height={500}
+            src="/echo.png"
+            alt="Echo Logo"
+            width={1000}
+            height={1000}
             className="w-full h-auto md:h-full md:w-auto md:object-cover md:object-left"
           />
         </div>

@@ -10,6 +10,7 @@ import { fetchAllProfiles } from "@/lib/sui-client"
 import { buildPostTradeTx, buildCreateManagerTx, buildCreateSignalTx, suiClient } from "@/lib/sui-client"
 import { parseDusd, DUSDC_TYPE } from "@/lib/constants"
 import { uploadToWalrus } from "@/lib/walrus"
+import { encryptAndUpload } from "@/lib/seal"
 
 interface PostTradeModalProps {
   open: boolean
@@ -175,45 +176,63 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
       const result = await signAndExecute({ transaction: tx })
       setTxDigest(result.digest)
 
-      // Upload reasoning to Walrus after trade is confirmed
+      // Upload reasoning after trade is confirmed
       if (reasoning.trim()) {
-        setErrorMsg("Uploading reasoning to Walrus…")
         try {
-          const blobId = await uploadToWalrus(reasoning.trim())
-          setReasoningBlobId(blobId)
-          localStorage.setItem(`echo_reasoning_${result.digest}`, blobId)
-
-          // If premium: create SEAL signal policy on-chain
           if (isPremium && myProfileId) {
+            // ── PREMIUM PATH ─────────────────────────────────────────────────
+            // Step 1: Create the SignalPolicy on-chain FIRST so we have the policy
+            //         object ID to use as the SEAL encryption namespace.
             setErrorMsg("Creating SEAL signal policy — approve wallet…")
             const signalTx = buildCreateSignalTx({
               profileObjectId: myProfileId,
-              blobId,
+              blobId: "pending", // placeholder — real blobId stored in localStorage after encrypt
               feeDusd: parseDusd(signalFee),
             })
             const signalResult = await signAndExecute({ transaction: signalTx })
-            // Capture the SignalPolicy object ID from effects so followers can pay to unlock
-            const created = (signalResult as { effects?: { created?: { reference: { objectId: string } }[] } })
-              .effects?.created
-            const policyObjectId = created?.[0]?.reference?.objectId
+            const signalTxFull = await suiClient.waitForTransaction({
+              digest: signalResult.digest,
+              options: { showEffects: true },
+            })
+            const policyObjectId = signalTxFull.effects?.created?.[0]?.reference?.objectId
+
             if (policyObjectId) {
-              // Store policy metadata so the feed can show "Unlock" buttons
+              // Step 2: Encrypt reasoning with SEAL using the policy as namespace,
+              //         then upload CIPHERTEXT (not plaintext) to Walrus.
+              setErrorMsg("Encrypting & uploading to Walrus…")
+              const { blobId, sealId } = await encryptAndUpload(
+                reasoning.trim(),
+                policyObjectId,
+                suiClient,
+              )
+              setReasoningBlobId(blobId)
+
+              // Store metadata so the feed can show the 🔒 unlock button
               localStorage.setItem(`echo_signal_${result.digest}`, JSON.stringify({
                 policyObjectId,
                 blobId,
+                sealId,       // needed by SEAL SDK for decryption key lookup
                 feeDusd: signalFee,
                 isPremium: true,
               }))
             }
           } else {
-            // Public reasoning — just store the blob ID for display
+            // ── PUBLIC PATH ───────────────────────────────────────────────────
+            // Plain text — upload unencrypted, readable by anyone
+            setErrorMsg("Uploading reasoning to Walrus…")
+            const blobId = await uploadToWalrus(reasoning.trim())
+            setReasoningBlobId(blobId)
             localStorage.setItem(`echo_signal_${result.digest}`, JSON.stringify({
               blobId,
+              sealId: null,
               isPremium: false,
             }))
           }
-        } catch {
-          // Non-fatal — trade succeeded, reasoning upload failed
+        } catch (sealErr) {
+          const sealMsg = sealErr instanceof Error ? sealErr.message : String(sealErr)
+          setErrorMsg(`⚠ Reasoning upload failed: ${sealMsg.slice(0, 120)}`)
+          setStatus("error")
+          return
         }
       }
 
@@ -408,11 +427,16 @@ export default function PostTradeModal({ open, onOpenChange }: PostTradeModalPro
                   </button>
                 </div>
                 {isPremium && (
-                  <div className="mt-3 flex items-center gap-2">
-                    <span className="text-xs text-gray-500">Unlock fee</span>
-                    <input type="number" value={signalFee} onChange={(e) => setSignalFee(e.target.value)}
-                      className="w-24 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-[#1a1a1a] text-sm text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                    <span className="text-xs text-gray-500">dUSDC</span>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Unlock fee</span>
+                      <input type="number" value={signalFee} onChange={(e) => setSignalFee(e.target.value)}
+                        className="w-24 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-[#1a1a1a] text-sm text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                      <span className="text-xs text-gray-500">dUSDC</span>
+                    </div>
+                    {!myProfileId && (
+                      <p className="text-xs text-amber-500">⚠ Create an Echo profile first — SEAL requires your profile object ID</p>
+                    )}
                   </div>
                 )}
               </div>

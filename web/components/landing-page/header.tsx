@@ -58,7 +58,7 @@ export default function Header() {
         <div className="container py-4">
           <div className="flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2" onClick={handleLogoClick}>
-              <Image src="/purple-circle-wave-static.png" alt="Echo Logo" width={40} height={40} className="h-10 w-10 object-cover rounded-full" priority />
+              <Image src="/echo.png" alt="Echo Logo" width={50} height={50} className="h-10 w-10 object-cover rounded-full" priority />
               <span className="text-xl font-semibold tracking-tight text-black dark:text-white">ECHO</span>
             </Link>
 

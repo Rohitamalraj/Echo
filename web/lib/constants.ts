@@ -1,11 +1,11 @@
 // ── Echo Contract Addresses (Sui Testnet) ────────────────────────────────────
 export const ECHO_PACKAGE_ID =
   process.env.NEXT_PUBLIC_ECHO_PACKAGE_ID ??
-  "0x74ddf6ea29b138db0f55db9aea82452ad80bbecf7d26bd05caa6095d05184125";
+  "0x7ac3de1b8ad5d43a7c04cbc22d3c84513d505a8f72d2573f3dfe7bb43d61e044";
 
 export const PROFILE_REGISTRY_ID =
   process.env.NEXT_PUBLIC_PROFILE_REGISTRY_ID ??
-  "0xb846a650ce785b26f151ec79a074a80b1263a9b508c0d67af92f4b524ca49f24";
+  "0x664964fac428df569c42b4b0c415ca867ddf80efda47b625707e05551d240b43";
 
 // ── DeepBook Predict Addresses (Sui Testnet) ─────────────────────────────────
 export const PREDICT_PACKAGE_ID =

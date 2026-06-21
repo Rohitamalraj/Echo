@@ -17,6 +17,8 @@ module echo::seal_signal {
     const EAlreadyPaid: u64 = 0;
     const EInsufficientPayment: u64 = 1;
     const EZeroFee: u64 = 2;
+    const ENoAccess: u64 = 3;
+    const EInvalidSealId: u64 = 4;
 
     // ── Structs ──────────────────────────────────────────────────────────────
 
@@ -121,9 +123,33 @@ module echo::seal_signal {
         });
     }
 
+    // ── SEAL Access Gate ─────────────────────────────────────────────────────
+
+    /// Called by the SEAL key server to verify the requester has paid.
+    ///
+    /// The SEAL SDK encodes IDs as: [policy_object_id_bytes (32 bytes) || nonce (5 bytes)].
+    /// This function verifies:
+    ///   1. The first 32 bytes of `id` match this policy's object ID (namespace isolation).
+    ///   2. The caller (ctx.sender()) is in paid_wallets.
+    ///
+    /// The key server simulates this PTB off-chain before releasing the decryption key.
+    entry fun seal_approve(id: vector<u8>, policy: &SignalPolicy, ctx: &TxContext) {
+        let caller = ctx.sender();
+        // Verify caller has paid
+        assert!(vec_set::contains(&policy.paid_wallets, &caller), ENoAccess);
+        // Verify ID namespace: first 32 bytes must match this policy's object ID
+        let policy_id_bytes = object::id_to_bytes(&object::id(policy));
+        assert!(id.length() >= policy_id_bytes.length(), EInvalidSealId);
+        let mut i = 0;
+        while (i < policy_id_bytes.length()) {
+            assert!(id[i] == policy_id_bytes[i], EInvalidSealId);
+            i = i + 1;
+        };
+    }
+
     // ── Read-Only ────────────────────────────────────────────────────────────
 
-    /// Seal key server calls this (via on-chain read) to verify payment before releasing key.
+    /// Legacy read — SEAL now uses seal_approve above.
     public fun has_paid(policy: &SignalPolicy, wallet: address): bool {
         vec_set::contains(&policy.paid_wallets, &wallet)
     }
