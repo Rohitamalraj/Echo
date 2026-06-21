@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect } from "react"
 import CoinLogo from "@/components/echo/coin-logo"
 
 const ASSETS = [
@@ -32,34 +33,73 @@ const ASSETS = [
 const DOUBLED = [...ASSETS, ...ASSETS]
 
 export default function Ticker() {
+  useEffect(() => {
+    const id = "echo-ticker-keyframes"
+    if (document.getElementById(id)) return
+    const style = document.createElement("style")
+    style.id = id
+    style.textContent = `
+      @keyframes echo-ticker {
+        from { transform: translateX(0); }
+        to   { transform: translateX(-50%); }
+      }
+    `
+    document.head.appendChild(style)
+  }, [])
+
   return (
-    <div className="relative overflow-hidden py-3">
+    <div
+      style={{ overflow: "hidden", position: "relative", padding: "10px 0" }}
+    >
       {/* left fade */}
-      <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-12 z-10 bg-gradient-to-r from-white/80 dark:from-[#2a2a2a]/80 to-transparent" />
+      <div style={{
+        position: "absolute", left: 0, top: 0, bottom: 0, width: 48, zIndex: 10,
+        background: "linear-gradient(to right, rgba(42,42,42,0.9), transparent)",
+        pointerEvents: "none",
+      }} />
       {/* right fade */}
-      <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-12 z-10 bg-gradient-to-l from-white/80 dark:from-[#2a2a2a]/80 to-transparent" />
+      <div style={{
+        position: "absolute", right: 0, top: 0, bottom: 0, width: 48, zIndex: 10,
+        background: "linear-gradient(to left, rgba(42,42,42,0.9), transparent)",
+        pointerEvents: "none",
+      }} />
 
       <div
-        className="flex items-center gap-1 w-max"
-        style={{ animation: "ticker-scroll 45s linear infinite" }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "max-content",
+          animation: "echo-ticker 45s linear infinite",
+        }}
         onMouseEnter={e => (e.currentTarget.style.animationPlayState = "paused")}
         onMouseLeave={e => (e.currentTarget.style.animationPlayState = "running")}
       >
         {DOUBLED.map((asset, i) => (
           <div
             key={i}
-            className="flex items-center gap-2 px-4 py-1.5 rounded-lg flex-shrink-0 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors cursor-default"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "4px 14px",
+              flexShrink: 0,
+              cursor: "default",
+            }}
           >
             <CoinLogo symbol={asset.symbol} size={22} />
             <div>
-              <p className="text-xs font-bold text-black dark:text-white leading-none">{asset.symbol}</p>
-              <p className="text-[10px] text-gray-400 leading-none mt-0.5">{asset.price}</p>
+              <p style={{ fontSize: 11, fontWeight: 700, lineHeight: 1, color: "inherit", margin: 0 }}
+                className="text-black dark:text-white">
+                {asset.symbol}
+              </p>
+              <p style={{ fontSize: 10, lineHeight: 1, marginTop: 3, color: "#9ca3af" }}>
+                {asset.price}
+              </p>
             </div>
-            <span className={`text-[10px] font-semibold ${asset.up ? "text-green-500" : "text-red-400"}`}>
+            <span style={{ fontSize: 10, fontWeight: 600, color: asset.up ? "#22c55e" : "#f87171" }}>
               {asset.change}
             </span>
-            {/* separator dot */}
-            <span className="text-gray-300 dark:text-gray-700 text-xs mx-1">·</span>
+            <span style={{ color: "#4b5563", margin: "0 4px", fontSize: 12 }}>·</span>
           </div>
         ))}
       </div>

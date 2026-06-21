@@ -13,7 +13,7 @@ export default function LandingPage() {
   return (
     <main className="min-h-screen bg-white dark:bg-[#111111]">
       <Header />
-      <div className="container pt-4">
+      <div className="container pt-0">
         <Hero />
         <ProtocolStrip />
         <Projects />

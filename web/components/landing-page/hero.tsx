@@ -5,7 +5,7 @@ import Ticker from "./ticker"
 
 export default function Hero() {
   return (
-    <section id="hero" className="card my-8 relative overflow-hidden shadow-md">
+    <section id="hero" className="card mt-1 mb-8 relative overflow-hidden shadow-md">
       <div className="p-8 md:p-10 lg:p-14 flex flex-col md:flex-row items-start">
         <div className="w-full md:w-3/5 z-10">
 
@@ -34,11 +34,11 @@ export default function Hero() {
           </div>
 
           {/* Trust strip */}
-          <div className="flex flex-wrap items-center gap-6 mt-8 pt-8 border-t border-gray-200 dark:border-gray-800">
+          <div className="flex flex-wrap items-center gap-6 mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
             {[
-              { label: "85/15 Split",   sub: "on-chain enforced" },
-              { label: "0 Middlemen",   sub: "fully trustless"   },
-              { label: "Instant Copy",  sub: "one transaction"   },
+              { label: "85/15 Split",  sub: "on-chain enforced" },
+              { label: "0 Middlemen",  sub: "fully trustless"   },
+              { label: "Instant Copy", sub: "one transaction"   },
             ].map(s => (
               <div key={s.label}>
                 <p className="text-sm font-semibold text-black dark:text-white">{s.label}</p>
@@ -55,13 +55,13 @@ export default function Hero() {
             alt="Echo"
             width={1000}
             height={1000}
-            className="w-full h-full object-cover object-left opacity-20 md:opacity-100"
+            className="w-full h-full object-cover object-left"
           />
         </div>
       </div>
 
-      {/* Ticker — full-width strip at the bottom of the hero card */}
-      <div className="border-t border-gray-200 dark:border-gray-800">
+      {/* Ticker — full-width strip directly below trust strip */}
+      <div className="border-t border-gray-200 dark:border-gray-800 mx-0">
         <Ticker />
       </div>
     </section>
