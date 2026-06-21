@@ -7,8 +7,7 @@ import CoinLogo from "@/components/echo/coin-logo"
 import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
 import { fetchAllProfiles } from "@/lib/sui-client"
-import { fetchMintedPositions, type PositionMinted } from "@/lib/predict-api"
-import { bpsToPercent } from "@/hooks/useProfiles"
+import { fetchMintedPositions, fetchAllOracles, type PositionMinted } from "@/lib/predict-api"
 import { DUSDC_DECIMALS } from "@/lib/constants"
 import { useQuery } from "@tanstack/react-query"
 import dynamic from "next/dynamic"
@@ -68,7 +67,12 @@ export default function PredictorProfilePage({ params }: Props) {
     refetchInterval: 30_000,
   })
 
-
+  // All oracles (including settled) — gives us settlement_price per oracle
+  const { data: allOracles } = useQuery({
+    queryKey: ["all-oracles"],
+    queryFn: fetchAllOracles,
+    staleTime: 60_000,
+  })
 
   const isLoading = profileLoading || posLoading
   const profile = onChainProfiles?.find(p => p.wallet === address)
@@ -78,9 +82,35 @@ export default function PredictorProfilePage({ params }: Props) {
     .filter(p => p.trader === address)
     .sort((a, b) => b.checkpoint_timestamp_ms - a.checkpoint_timestamp_ms)
   const openTrades = traderPositions.filter(p => p.expiry > Date.now())
+  const expiredTrades = traderPositions.filter(p => p.expiry <= Date.now())
 
   const displayName = profile?.display_name ?? shortAddr(address)
-  const winRate = profile ? bpsToPercent(profile.win_rate_bps) : null
+  const totalTradesLive = traderPositions.length
+
+  // Compute win rate from oracle settlement prices
+  // A trade wins if: is_up=true & settlement_price > strike, or is_up=false & settlement_price <= strike
+  const oracleMap = new Map((allOracles ?? []).map(o => [o.oracle_id, o]))
+  const settledTrades = expiredTrades.filter(p => {
+    const oracle = oracleMap.get(p.oracle_id)
+    return oracle?.settlement_price != null
+  })
+  const wonTrades = settledTrades.filter(p => {
+    const sp = oracleMap.get(p.oracle_id)!.settlement_price!
+    return p.is_up ? sp > p.strike : sp <= p.strike
+  })
+  const winRate = settledTrades.length > 0
+    ? Math.round((wonTrades.length / settledTrades.length) * 100)
+    : null
+  const currentStreak = (() => {
+    let streak = 0
+    for (const p of expiredTrades) {
+      const sp = oracleMap.get(p.oracle_id)?.settlement_price
+      if (sp == null) break
+      const won = p.is_up ? sp > p.strike : sp <= p.strike
+      if (won) streak++; else break
+    }
+    return streak
+  })()
 
   function toActiveTrade(pos: PositionMinted) {
     const expiryMinutes = Math.max(1, Math.round((pos.expiry - Date.now()) / 60_000))
@@ -157,9 +187,13 @@ export default function PredictorProfilePage({ params }: Props) {
           <section className="my-8">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {[
-                { label: "Win Rate", value: `${winRate}%`, color: (winRate ?? 0) >= 60 ? "text-green-500" : "text-[#f59e0b]" },
-                { label: "Total Trades", value: String(Number(profile.total_trades)), color: "text-black dark:text-white" },
-                { label: "Streak", value: `${Number(profile.current_streak)} 🔥`, color: "text-black dark:text-white" },
+                {
+                  label: "Win Rate",
+                  value: winRate !== null ? `${winRate}%` : "—",
+                  color: winRate !== null ? (winRate >= 60 ? "text-green-500" : "text-[#f59e0b]") : "text-gray-400",
+                },
+                { label: "Total Trades", value: String(totalTradesLive), color: "text-black dark:text-white" },
+                { label: "Streak", value: `${currentStreak} 🔥`, color: "text-black dark:text-white" },
                 { label: "Followers", value: String(Number(profile.follower_count)), color: "text-[#7A7FEE]" },
                 { label: "Copy Earnings", value: `${formatDusd(profile.copy_earnings_cents)} dUSDC`, color: "text-green-500" },
               ].map(s => (
