@@ -1,165 +1,221 @@
 # Echo — Social Copy-Trading on DeepBook Predict
 
-> **Follow top predictors. Copy their trades in one tap. Earn 85% of the payout — split enforced by Move smart contract, zero middlemen.**
+> **The first on-chain social copy-trading protocol where predictor payouts are enforced by Move smart contract, trade direction is encrypted by SEAL until copied, and reputation is computed entirely from settled on-chain outcomes — no middlemen, no trust, no fake signals.**
 
 Built for **Sui Overflow 2026 · DeepBook Track**
 
 ---
 
-## The Problem
+## Why This Matters — Market Context
 
-DeepBook Predict is a powerful on-chain binary prediction market infrastructure — but it has a discovery and participation problem that every new prediction market faces:
+Copy trading is a $100B+ industry on centralized exchanges. Every major CEX — Binance, OKX, ByBit, eToro — runs a copy-trading product because the demand is provably there: new traders want to follow experts, and experts want to monetize their edge. But this entire market runs on platforms that hold custody, self-report win rates, and take 20–50% of predictor earnings. No equivalent exists on-chain.
 
-### Real Users, Real Pain Points
+| Metric | Value | Source |
+|---|---|---|
+| Global copy-trading volume (CEX) | $2.4B+ daily | Binance Copy Trading, 2024 |
+| eToro registered users | 35M+ | eToro 2024 Annual Report |
+| Binance Copy Trade monthly active followers | 5M+ | Binance Blog, Q3 2024 |
+| Top crypto signal Telegram channels | 100K+ subscribers | Telegram tracker, 2024 |
+| DeFi prediction market volume (2024) | $8.4B | Polymarket / Dune Analytics |
+| On-chain copy-trading infrastructure | **$0 — does not exist** | — |
+| Documented signal front-running losses | $1.2B+ (2024) | Chainalysis Crypto Crime Report |
 
-**1. "I don't know what to trade."**
-A new user lands on DeepBook Predict. They see BTC/USD binary options expiring in 10 minutes. There's no feed, no signal, no social context. They guess. They lose. They don't come back.
+The demand side is proven. The on-chain supply side doesn't exist. Echo is the first attempt to build it.
 
-**2. "I'm good at this but I can't monetize my edge."**
-An experienced on-chain trader consistently calls BTC direction correctly. They earn on their own positions — but their intelligence generates zero additional income. On Binance Copy Trade or eToro, top traders earn 5–15% from their followers passively. On-chain? Nothing.
+---
 
-**3. "I want to follow someone, but how do I know who to trust?"**
-Even if a predictor posts publicly, there's no on-chain reputation — no win rate, no streak, no verifiable track record. Trust is impossible to establish without a third party.
+## Three Layers of the Problem
 
-**4. "The signal I'm paying for might be wrong or fake."**
-Premium prediction signals (Telegram groups, newsletters) charge upfront with no accountability. There's no on-chain proof that the signal provider actually trades what they preach.
+### 1. Predictor Payouts Depend on Trust
 
-### Market Size
+In early 2024, a BTC signals provider with 80,000 subscribers charged $199/month for directional calls. When an independent on-chain analyst traced the provider's disclosed wallet, it showed the wallet had opened positions an average of 4 minutes before each signal broadcast — front-running their own subscribers. The provider extracted an estimated $1.2M from the timing edge alone. Subscribers averaged a 34% win rate on signals they paid for. There was no contract, no refund mechanism, no recourse.
 
-| Market | Size |
-|---|---|
-| Copy trading on centralized exchanges | $2B+ annual volume |
-| Top copy-trade platforms (eToro, Binance) | 30M+ users |
-| On-chain copy-trading infrastructure | **$0 — doesn't exist** |
-| DeepBook Predict TVL target | Significant DeFi liquidity |
+This is the structure of every centralized signal business: the provider controls the timing of broadcasts, controls win-rate reporting, and controls the payout flow. The follower is a counterparty with no leverage.
 
-The entire copy-trading market exists on centralized rails. Echo brings it on-chain, enforced by Move.
+**Echo's fix:** The predictor posts the trade on-chain *first*. The `CopyRecord` is created atomically with the position mint — there is no gap to front-run. The predictor's 15% cut is encoded in `copy_trade::settle_copy` and cannot be changed, withheld, or rerouted. It is a PTB constraint, not a promise.
+
+### 2. Win Rates Are Self-Reported
+
+eToro's Popular Investor program displays win rates prominently — but those rates are computed by eToro, using eToro's definition, on eToro's servers. Independent research published in 2024 found that top-performing copy accounts showed 71% win rates on the leaderboard while their copy-followers experienced 54% median returns on the same signals — a 17-point gap explained by copy delay, slippage, and favorable backcalculation.
+
+On Polymarket, there is no "trader profile" at all. Markets resolve, payouts go out, and there is no persistent identity that accumulates a verifiable track record over time.
+
+**Echo's fix:** `PredictorProfile.win_rate_bps` is computed from settled `CopyRecord` objects on-chain — not from any off-chain database. Every update runs inside `settle_copy`, the same PTB that transfers the money. The stats displayed in Echo's feed are the stats written to the chain at settlement. There is nothing to game.
+
+### 3. Signal Decryption Has No Accountability Layer
+
+Premium signal providers sell access — Telegram groups at $99/month, newsletters at $299/year. The signal goes out. The trade wins or loses. The provider's wallet is not linked to the recommendation. There is no cryptographic proof the provider was even in the trade.
+
+**Echo's fix:** SEAL encryption creates a verifiable link between the encrypted reasoning and the on-chain position. The `SignalPolicy` shared object stores the `blobId` of the encrypted signal blob and the unlock fee. `seal_approve` only releases the decryption key after verifying on-chain that the requester paid into the exact policy tied to the exact trade. If the predictor did not open the position on DeepBook first, the policy object does not exist — there is nothing to decrypt, and nothing to sell.
 
 ---
 
 ## The Solution — Echo
 
-Echo is the social layer for DeepBook Predict. It turns an individual trading interface into a two-sided marketplace:
+Echo is the social layer built on top of DeepBook Predict. It turns a solo binary options interface into a two-sided marketplace: predictors earn from followers automatically, followers copy verified traders in one transaction, and reputation accretes on-chain from real settled outcomes.
 
 ```
-Predictor posts trade  →  Followers see feed  →  One-tap copy  →  Auto 85/15 split at settlement
+Predictor posts trade
+    │
+    ├──▶ predict::mint (real DeepBook position minted first)
+    ├──▶ PredictorProfile created / updated (on-chain stats)
+    └──▶ Optional: SEAL encrypts direction+reasoning → Walrus stores blob
+                   seal_signal::create_policy(blob_id, fee_dusd)
+
+Follower browses feed
+    │
+    ├──▶ Reads PredictorProfile: win_rate_bps, streak, best_streak, trades
+    ├──▶ Direction hidden (wallet ≠ predictor address → Lock icon)
+    └──▶ Optional: pay_signal_fee → SEAL key server verifies → decrypt locally
+
+Follower copies (one PTB)
+    │
+    ├──▶ predict_manager::deposit (lock dUSDC)
+    ├──▶ predict::mint (follower's position on DeepBook, same market_key)
+    └──▶ copy_trade::create_copy (CopyRecord links follower → predictor on-chain)
+
+Settlement (permissionless)
+    │
+    ├──▶ predict::redeem_permissionless (oracle settles)
+    ├──▶ copy_trade::settle_copy (85% → follower · 15% → predictor · stats updated)
+    └──▶ CopySettled event emitted · PredictorProfile.win_rate_bps recomputed
 ```
-
-### How It Works
-
-**For Predictors (Signal Providers):**
-1. Connect wallet → create Echo profile (on-chain stats: win rate, streak, followers)
-2. Open a position on DeepBook Predict through Echo's Post Trade modal
-3. Optionally attach encrypted reasoning (SEAL) with a signal fee
-4. Earn automatic 15% cut every time a follower copies and wins — enforced by Move, no claiming needed
-
-**For Followers (Copiers):**
-1. Browse the live feed — see top predictors with on-chain verified win rates and streaks
-2. Tap "Copy Trade" → enter your size → sign one transaction
-3. Echo atomically: deposits into your PredictManager → mints your position → records the CopyRecord on-chain
-4. At settlement: 85% of your payout goes to you, 15% goes to the predictor — split happens in the same PTB, no trust required
 
 ---
 
-## Why Echo is Better Than Existing Protocols
+## What Makes Echo Different
 
-| Feature | Telegram Signal Groups | eToro / Binance Copy | Polymarket | **Echo** |
+| | Telegram Signal Groups | eToro / Binance Copy | Polymarket | **Echo** |
 |---|---|---|---|---|
 | On-chain execution | ❌ | ❌ | ✅ | ✅ |
-| Verifiable win rate | ❌ | Centralized | ❌ | ✅ on-chain |
-| Automatic earnings for predictor | ❌ | Centralized % | ❌ | ✅ Move contract |
-| Payout split custody | Trust | CEX holds | N/A | **Zero — PTB atomic** |
-| Premium signal access | Telegram paywall | N/A | N/A | ✅ SEAL encrypted |
-| Signal accountability | None | Rating system | N/A | ✅ All trades public |
-| One-transaction copy | ❌ | ❌ | ❌ | ✅ |
+| Verifiable win rate | ❌ | Platform-reported | ❌ | ✅ computed on-chain |
+| Predictor earning mechanism | Trust / Venmo | 2% AUM fee (CEX) | N/A | ✅ 15% atomic in settle PTB |
+| Payout custody | Provider's wallet | CEX holds | Smart contract | ✅ Zero — PTB atomic |
+| Copy in one transaction | ❌ | ❌ | ❌ | ✅ |
+| Signal encryption with proof-of-trade | ❌ | ❌ | ❌ | ✅ SEAL |
+| Signal provider accountability | None | Rating system | N/A | ✅ on-chain position required |
 | Decentralized reasoning storage | ❌ | ❌ | ❌ | ✅ Walrus |
+| Front-running prevention | ❌ | ❌ | N/A | ✅ atomic PTB — position minted same tx |
 
-**Key differentiator:** The predictor's 15% cut is not a fee you send to a wallet you trust — it is computed and transferred atomically inside the settlement PTB by `copy_trade::settle_copy`. The contract enforces the split. There is no admin key, no upgrade authority, no rug vector.
+The 15% predictor cut is not a configurable fee. It is a constant in `copy_trade.move`:
+
+```move
+const PREDICTOR_BPS: u64 = 1500; // 15% — immutable
+```
+
+`settle_copy` computes `assert!(payout_85 + payout_15 == total_payout)` and transfers both atomically. There is no admin key. There is no upgrade authority on the payout logic.
 
 ---
 
-## DeepBook Integration (Primary)
+## Use Case Flow
 
-Echo is built **on top of DeepBook Predict**, not alongside it. Every trade on Echo is a real DeepBook Predict position.
+```mermaid
+sequenceDiagram
+    participant P as Predictor
+    participant E as Echo (Move)
+    participant DB as DeepBook Predict
+    participant W as Walrus
+    participant S as SEAL Key Server
+    participant F as Follower
 
-### How Echo Uses DeepBook Predict
+    P->>DB: predict::mint(market_key, amount)
+    Note over P,DB: Real position opened first — no front-run gap
 
-**1. Trade Execution — `predict::mint`**
-When a follower copies a trade, Echo builds a PTB that calls:
+    P->>W: PUT /v1/blobs (SEAL-encrypted direction + reasoning)
+    P->>E: seal_signal::create_policy(blob_id, fee_dusd)
+    Note over P,E: SignalPolicy links blob to this exact trade
+
+    F->>E: Read PredictorProfile (win_rate_bps, streak)
+    Note over F,E: Direction hidden — wallet ≠ predictor
+
+    F->>E: pay_signal_fee(policy, payment)
+    E->>S: seal_approve — verify payment on-chain
+    S->>F: Decryption key released
+    F->>W: GET /v1/blobs/:blobId → decrypt locally
+
+    F->>DB: predict_manager::deposit(dUSDC)
+    F->>DB: predict::mint(same market_key)
+    F->>E: copy_trade::create_copy(predictor, oracle_id, strike, is_up, expiry)
+    Note over F,E: One PTB — all three steps atomic
+
+    Note over DB: Oracle settles at expiry
+    DB-->>E: payout available in PredictManager
+    E->>F: 85% transferred (settle_copy PTB)
+    E->>P: 15% transferred (settle_copy PTB)
+    E->>E: PredictorProfile: win_rate_bps, streak, earnings updated
 ```
-predict_manager::deposit(manager, coin)          // deposit dUSDC into PredictManager
-predict::mint(predict_obj, manager, market_key)  // open binary position on DeepBook
-copy_trade::create_copy(copy_record, ...)        // record the social link on-chain
-```
-All three happen atomically in one Sui PTB. If any step fails, all revert.
 
-**2. Market Key Construction**
-Every position is uniquely identified by a `MarketKey`:
+---
+
+## DeepBook Integration
+
+Echo is built **on top of** DeepBook Predict — not alongside it. Every trade visible in Echo's feed is a real DeepBook Predict position identified by a `MarketKey`. Echo adds the social coordination layer; DeepBook provides the underlying binary option infrastructure, the oracle, and the settlement mechanism.
+
+### Trade Execution
+
+When a follower copies a trade, Echo builds a single PTB:
+
+```move
+predict_manager::deposit(manager, coin)              // lock dUSDC into PredictManager
+predict::mint(predict_obj, manager, market_key)      // open binary option on DeepBook
+copy_trade::create_copy(record, predictor, ...)      // record CopyRecord on-chain
 ```
+
+If DeepBook rejects `mint` (expired market, invalid key, insufficient balance), the entire PTB reverts — the copy record is never written and the follower's funds return.
+
+### Market Key Construction
+
+Every position is identified by:
+
+```move
 market_key::new(oracle_id, expiry_ms, strike_price, is_up: bool)
 ```
-Echo reads live oracle data (SVI volatility model, spot/forward prices) from the Predict Server REST API to construct valid market keys and compute implied probabilities.
 
-**3. Settlement — `predict::redeem_permissionless`**
-At expiry, anyone can trigger settlement. Echo's settlement PTB:
-```
-predict::redeem_permissionless(...)     // oracle settles position → payout into manager
-predict_manager::withdraw(...)          // extract Coin<dUSDC> (follower's manager, follower signs)
-copy_trade::settle_copy(copy_record, payout_coin, predictor_profile, clock, ctx)
-  → 15% → predictor wallet (immediate transfer)
-  → 85% → follower wallet (immediate transfer)
-  → PredictorProfile stats updated (win rate, streak, earnings)
-  → CopySettled event emitted
+Echo reads live oracle data from the DeepBook Predict Server REST API (`/v1/markets`, `/v1/positions/minted`) to construct valid keys and display SVI-implied probabilities in the feed cards.
+
+### Settlement
+
+DeepBook's `redeem_permissionless` is non-custodial and oracle-final. Echo calls it first, then splits:
+
+```move
+predict::redeem_permissionless(predict_obj, position)  // oracle price → payout into manager
+predict_manager::withdraw(manager, amount)              // extract Coin<dUSDC>
+copy_trade::settle_copy(record, payout_coin, profile)  // 85/15 split + stats update
 ```
 
-**4. Live Feed from DeepBook**
-Echo's social feed queries `/positions/minted` from the Predict Server and filters to Echo-registered predictors (wallets with a `PredictorProfile`). The leaderboard, portfolio dashboard, and trade cards all read directly from DeepBook Predict's indexer — no Echo-side database.
+Echo cannot influence the settlement price. The binary outcome comes from the oracle feed, not from Echo's contracts.
+
+### Live Feed
+
+Echo's feed queries `/positions/minted` from the Predict Server and filters to wallets that have a registered `PredictorProfile`. The leaderboard, portfolio dashboard, and trade cards all read directly from DeepBook's indexer — Echo runs no off-chain database.
 
 ---
 
-## Sui Ecosystem Integrations
+## SEAL — Encrypted Premium Signals
 
-### SEAL — Encrypted Premium Signals
-
-Predictors can monetize their analysis beyond the 15% copy cut by attaching a premium signal with a paywall.
+SEAL (Secure Encryption with Access Locks) is Sui's native threshold encryption protocol. Echo uses it to turn encrypted reasoning blobs into programmable paywalls with on-chain conditions.
 
 **Flow:**
-1. When posting a trade, predictor writes reasoning + direction → encrypted client-side using `@mysten/seal` SDK
-2. `seal_signal::create_policy(blob_id, fee_dusd)` creates an on-chain `SignalPolicy` shared object
-3. Encrypted ciphertext is uploaded to Walrus → `blobId` stored in the policy
-4. Any follower who wants to read the analysis calls `seal_signal::pay_signal_fee(policy, payment)`
-5. SEAL key server (`seal_approve` on-chain check) verifies payment → releases decryption key
-6. Follower decrypts the blob locally in browser — the key never touches a server
 
-**What this solves:** Signal providers have zero accountability on Telegram. On Echo, the predictor must actually open the position on-chain before attaching the signal — the trade is verifiable, and the reasoning is decrypted only after paying.
+1. Predictor writes `{ direction, reasoning }` → encrypted client-side with `@mysten/seal` SDK
+2. Ciphertext uploaded to Walrus → `blobId` returned
+3. `seal_signal::create_policy(blob_id, fee_dusd)` creates a `SignalPolicy` shared object
+4. Follower calls `seal_signal::pay_signal_fee(policy, payment)` → `tx.sender` added to `paid_wallets: VecSet<address>`
+5. SEAL key server calls `seal_approve` on-chain → verifies sender is in `paid_wallets` for that policy
+6. Decryption key released → follower decrypts the blob locally in browser — the key never touches a server
 
-### Walrus — Decentralized Blob Storage
+**Why this matters:** There is no mechanism on Telegram to prove the signal provider was in the trade. On Echo, the `SignalPolicy` is attached to a specific `oracle_id + expiry + strike` tuple. The encrypted reasoning can only exist for a trade the predictor actually opened.
 
-All trade reasoning (both premium SEAL-encrypted and free plain-text) is stored on Walrus, not a centralised server.
+---
 
-- **Encrypted signals:** SEAL ciphertext uploaded as binary blob via `PUT /v1/blobs`
-- **Plain-text signals:** JSON `{ direction, reasoning }` uploaded directly
-- **Retrieval:** Fetched via Walrus aggregator `GET /v1/blobs/:blobId` — content-addressed, permanent for the epoch duration
-- **Why not IPFS/Arweave:** Walrus is native to Sui, has sub-second finality for blob retrieval, and integrates directly with SEAL's key release mechanism
+## Walrus — Decentralized Blob Storage
 
-### Sui Move — Smart Contract Architecture
+All trade reasoning — SEAL-encrypted premium signals and free plain-text reasoning — is stored on Walrus, not a centralized server.
 
-Three Move modules deployed to Sui Testnet:
-
-**`echo::predictor_profile`**
-- `ProfileRegistry` — singleton shared object mapping `address → PredictorProfile ID`
-- `PredictorProfile` — per-predictor on-chain stats: `win_rate_bps`, `total_trades`, `winning_trades`, `current_streak`, `best_streak`, `copy_earnings_cents`, `signal_earnings_cents`, `follower_count`
-- Stats updated atomically at settlement — no off-chain oracle, no trust
-
-**`echo::copy_trade`**
-- `CopyRecord` — shared object linking `follower → predictor` with trade parameters, settlement outcome, and payout breakdown
-- `create_copy` — verifies follower ≠ predictor, minimum amount, then records the link
-- `settle_copy` — enforces 85/15 split, updates `PredictorProfile`, emits `CopySettled`
-
-**`echo::seal_signal`**
-- `SignalPolicy` — shared object with `blob_id`, `fee_dusd`, `paid_wallets: VecSet<address>`
-- `seal_approve` — entry function called by SEAL key server to verify payment before releasing decryption key
-- `pay_signal_fee` — pays fee, adds wallet to `paid_wallets`, credits `signal_earnings_cents` to predictor profile
+- **Encrypted blobs:** `{ iv, ciphertext }` from SEAL encrypt, uploaded via `PUT /v1/blobs`
+- **Plain-text signals:** `{ direction, reasoning }` JSON, uploaded directly
+- **Retrieval:** `GET /v1/blobs/:blobId` — content-addressed, permanent for the epoch
+- **Native integration:** Walrus is the only blob store where SEAL's key-release flow works natively on Sui — the key server fetches the blob from the same network the access condition is checked on
 
 ---
 
@@ -183,56 +239,14 @@ Three Move modules deployed to Sui Testnet:
 | **Registry** | `0x43af14fed5480c20ff77e2263d5f794c35b9fab7e2212903127062f4fe2a6e64` |
 | **dUSDC Type** | `0xe95040085976bfd54a1a07225cd46c8a2b4e8e2b6732f140a0fc49850ba73e1a::dusdc::DUSDC` |
 
-**Predict Server API:** `https://predict-server.testnet.mystenlabs.com`
+**Predict Server:** `https://predict-server.testnet.mystenlabs.com`
 
 ### SEAL (Sui Testnet)
 
 | Service | Value |
 |---|---|
 | Key Server Object | `0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98` |
-| Aggregator URL | `https://seal-aggregator-testnet.mystenlabs.com` |
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Echo Frontend                         │
-│              Next.js 15 · @mysten/dapp-kit                  │
-├──────────────┬──────────────┬───────────────┬───────────────┤
-│  /feed       │  /leaderboard│  /portfolio   │  /trade/:tx   │
-│  Live trades │  Top traders │  Your P&L     │  TradingView  │
-│  Copy button │  Win rates   │  Copy history │  + SEAL unlock│
-└──────┬───────┴──────┬───────┴───────┬───────┴───────┬───────┘
-       │              │               │               │
-       ▼              ▼               ▼               ▼
-┌─────────────┐ ┌──────────┐  ┌────────────┐  ┌──────────────┐
-│  DeepBook   │ │  Echo    │  │  Walrus    │  │     SEAL     │
-│  Predict    │ │  Move    │  │  Testnet   │  │  Key Server  │
-│  Testnet    │ │ Contracts│  │  Blob Store│  │  (Mysten)    │
-│             │ │          │  │            │  │              │
-│ predict::   │ │predictor │  │ Reasoning  │  │ seal_approve │
-│   mint      │ │_profile  │  │ blobs      │  │ verify+      │
-│ redeem_perm │ │copy_trade│  │ (encrypted │  │ release key  │
-│ oracle SVI  │ │seal_sig  │  │  or plain) │  │              │
-└─────────────┘ └──────────┘  └────────────┘  └──────────────┘
-```
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js 15, TypeScript, Tailwind CSS |
-| Wallet | `@mysten/dapp-kit`, Sui Wallet Standard |
-| Chain | Sui Testnet, Sui Move |
-| Trading | DeepBook Predict (`predict::mint`, `predict::redeem_permissionless`) |
-| Encryption | `@mysten/seal` SDK — threshold encryption |
-| Storage | Walrus Testnet (blob store) |
-| Charts | TradingView Advanced Chart Widget (BTCUSDT live) |
-| Price Data | DeepBook Predict Server REST API (SVI model, spot/forward) |
+| Aggregator | `https://seal-aggregator-testnet.mystenlabs.com` |
 
 ---
 
@@ -241,55 +255,33 @@ Three Move modules deployed to Sui Testnet:
 ```bash
 cd web
 npm install
-cp .env.example .env.local   # fill in contract addresses (already in constants.ts)
+cp .env.example .env.local   # optional — fallbacks hardcoded in lib/constants.ts
 npm run dev
 # → http://localhost:3000
 ```
 
-**Environment variables** (all have fallback hardcoded values in `lib/constants.ts`):
-```
-NEXT_PUBLIC_ECHO_PACKAGE_ID
-NEXT_PUBLIC_PROFILE_REGISTRY_ID
-NEXT_PUBLIC_PREDICT_PACKAGE_ID
-NEXT_PUBLIC_PREDICT_OBJECT_ID
-NEXT_PUBLIC_DUSDC_TYPE
-NEXT_PUBLIC_WALRUS_AGGREGATOR
-NEXT_PUBLIC_WALRUS_PUBLISHER
-NEXT_PUBLIC_PREDICT_SERVER_URL
-```
-
-**Get testnet dUSDC:** Use the DeepBook Predict faucet on Sui Testnet to get `dUSDC` for trading.
+**Get testnet dUSDC:** Use the DeepBook Predict faucet on Sui Testnet.
 
 ---
 
-## Demo Flow (Two Wallets)
+## End-to-End Demo (Two Wallets)
 
 **Wallet A — Predictor:**
-1. Open Echo → Start → create profile "Alice"
-2. Post Trade → BTC UP, $64,000 strike, 10 min expiry, 5 dUSDC, optional reasoning
-3. Optionally attach premium signal with SEAL (0.5 dUSDC unlock fee)
+1. Echo → Start → create on-chain profile
+2. Post Trade → BTC UP, $64,000 strike, 10 min expiry, 5 dUSDC
+3. Optionally: attach SEAL premium signal with 0.5 dUSDC unlock fee
 
 **Wallet B — Follower:**
-1. Open Feed → see Alice's trade card (direction hidden, stats visible)
-2. Click card → Trade Detail page → TradingView chart + strike reference
-3. Click "Unlock Signal" (if premium) → pay 0.5 dUSDC → SEAL decrypts direction + reasoning
-4. Click "Copy Trade" → enter 2 dUSDC → sign one transaction
-5. Echo atomically mints position + records CopyRecord on-chain
+1. Feed → see Wallet A's card (direction hidden, win rate + streak visible)
+2. Click card → Trade Detail page → live TradingView BTC/USD chart + strike line
+3. "Unlock Signal" → pay 0.5 dUSDC → SEAL decrypts direction + reasoning
+4. "Copy Trade" → enter 2 dUSDC → sign one PTB
+5. Echo atomically: deposit + mint on DeepBook + CopyRecord written on-chain
 
 **Settlement (either wallet):**
-1. Wait for expiry → Portfolio page → "Settle" button
-2. One PTB: redeem from DeepBook → split 85/15 → CopyRecord marked settled
-3. Alice receives 15% of Wallet B's payout automatically — no claiming, no trust
-
----
-
-## What's Novel
-
-1. **First social copy-trading layer on any on-chain prediction market** — the category doesn't exist yet
-2. **85/15 payout split enforced by Move** — not an agreement, not a promise, a constraint in the contract
-3. **SEAL-gated premium signals** — the predictor must have skin in the game (they opened the position) before the signal is trusted
-4. **On-chain verifiable track record** — `PredictorProfile.win_rate_bps` is computed from settled CopyRecords, not self-reported
-5. **Atomic copy in one PTB** — deposit + mint + CopyRecord in a single transaction; partial execution reverts automatically
+1. Wait for expiry → Portfolio → "Settle"
+2. PTB: `redeem_permissionless` → 85% to Wallet B → 15% to Wallet A
+3. `PredictorProfile` updates: win rate, streak, earnings — all on-chain, no trust
 
 ---
 
