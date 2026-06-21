@@ -2,17 +2,15 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import Header from "@/components/landing-page/header"
 import Footer from "@/components/landing-page/footer"
 import { fetchMintedPositions, type PositionMinted } from "@/lib/predict-api"
-import { fetchAllProfiles, fetchSignalPolicies, buildPaySignalFeeTx, suiClient, type PredictorProfileFields } from "@/lib/sui-client"
-import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage } from "@mysten/dapp-kit"
+import { fetchAllProfiles, type PredictorProfileFields } from "@/lib/sui-client"
+import { useCurrentAccount } from "@mysten/dapp-kit"
 import { useQuery } from "@tanstack/react-query"
-import { TrendingUp, TrendingDown, Loader2, RefreshCw, Copy, Lock, Unlock } from "lucide-react"
+import { TrendingUp, TrendingDown, Loader2, RefreshCw, Copy, Lock } from "lucide-react"
 import CoinLogo from "@/components/echo/coin-logo"
-import { fetchFromWalrus } from "@/lib/walrus"
-import { downloadAndDecryptSignal, NoAccessError } from "@/lib/seal"
-import { DUSDC_TYPE } from "@/lib/constants"
 import dynamic from "next/dynamic"
 
 const CopyModal = dynamic(() => import("@/components/echo/copy-modal"), { ssr: false })
@@ -50,12 +48,8 @@ function impliedProb(askPrice: number): number {
 
 export default function FeedPage() {
   const account = useCurrentAccount()
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
-  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage()
+  const router = useRouter()
   const [copyTarget, setCopyTarget] = useState<PositionMinted | null>(null)
-  // blobId → decrypted payload (direction + reasoning, or plain text for legacy)
-  const [revealedReasoning, setRevealedReasoning] = useState<Record<string, { direction?: "UP" | "DOWN"; reasoning: string }>>({})
-  const [unlocking, setUnlocking] = useState<string | null>(null)
 
   const { data: positions, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["feed-positions"],
@@ -70,119 +64,20 @@ export default function FeedPage() {
     staleTime: 60_000,
   })
 
-  // Build address → profile map for names
   const profileMap = new Map<string, PredictorProfileFields>()
   profiles?.forEach(p => profileMap.set(p.wallet, p))
 
-  // Only show trades from Echo-registered predictors (wallets with a profile)
   const echoPositions = (positions ?? []).filter(p => profileMap.has(p.trader))
 
   const live = echoPositions
     .filter(p => p.expiry > Date.now())
     .sort((a, b) => b.checkpoint_timestamp_ms - a.checkpoint_timestamp_ms)
 
-  const expired = echoPositions
+  const recentExpired = echoPositions
     .filter(p => p.expiry <= Date.now())
     .sort((a, b) => b.checkpoint_timestamp_ms - a.checkpoint_timestamp_ms)
     .slice(0, 20)
 
-  // Signal metadata stored in localStorage by post-trade-modal
-  function getSignalMeta(txDigest: string): {
-    blobId?: string
-    sealId?: string          // SEAL encrypted ID (needed for SEAL decrypt)
-    policyObjectId?: string
-    feeDusd?: string
-    isPremium: boolean
-  } | null {
-    try {
-      const raw = localStorage.getItem(`echo_signal_${txDigest}`)
-      return raw ? JSON.parse(raw) : null
-    } catch { return null }
-  }
-
-  function parseSignalPayload(raw: string): { direction?: "UP" | "DOWN"; reasoning: string } {
-    try {
-      const p = JSON.parse(raw)
-      if (typeof p.reasoning === "string") return { direction: p.direction, reasoning: p.reasoning }
-    } catch { /* plain text fallback */ }
-    return { reasoning: raw }
-  }
-
-  async function handleReveal(blobId: string) {
-    if (revealedReasoning[blobId]) return
-    try {
-      const text = await fetchFromWalrus(blobId)
-      setRevealedReasoning(prev => ({ ...prev, [blobId]: parseSignalPayload(text) }))
-    } catch {
-      setRevealedReasoning(prev => ({ ...prev, [blobId]: { reasoning: "(failed to load)" } }))
-    }
-  }
-
-  // Premium reasoning:
-  //   1. Pay signal fee on-chain (adds wallet to SignalPolicy.paid_wallets)
-  //   2. SEAL key server verifies seal_approve, releases decryption key
-  //   3. Decrypt ciphertext locally with @mysten/seal SDK
-  async function handleUnlock(
-    policyObjectId: string,
-    predictorAddress: string,
-    blobId: string,
-    sealId: string | undefined,
-    feeDusd: string,
-  ) {
-    if (!account) return
-    setUnlocking(policyObjectId)
-    try {
-      // Step 1: Pay the signal fee on-chain
-      const [policies, coins, allProfs] = await Promise.all([
-        fetchSignalPolicies(predictorAddress),
-        suiClient.getCoins({ owner: account.address, coinType: DUSDC_TYPE }),
-        fetchAllProfiles(),
-      ])
-      const policy = policies.find(p => p.objectId === policyObjectId)
-      if (!policy || !coins.data.length) throw new Error("Cannot unlock — no policy or no dUSDC")
-      const predProfile = allProfs.find(p => p.wallet.toLowerCase() === predictorAddress.toLowerCase())
-      if (!predProfile) throw new Error("Predictor has no Echo profile")
-      const predProfileId = (predProfile.id as unknown as { id: string }).id
-      const tx = buildPaySignalFeeTx({
-        signalPolicyObjectId: policyObjectId,
-        predictorProfileObjectId: predProfileId,
-        dusdCoinObjectId: coins.data[0].coinObjectId,
-        feeDusd: BigInt(Math.round(Number(feeDusd) * 1e6)),
-      })
-      await signAndExecute({ transaction: tx })
-
-      // Step 2 & 3: If this was SEAL-encrypted, decrypt via SEAL SDK.
-      // Older signals uploaded as plain text fall back to a direct Walrus fetch.
-      if (sealId) {
-        const text = await downloadAndDecryptSignal({
-          blobId,
-          sealId,
-          policyObjectId,
-          suiClient,
-          currentAddress: account.address,
-          signPersonalMessage: async ({ message }) => {
-            const result = await signPersonalMessage({ message })
-            return { signature: result.signature }
-          },
-        })
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: parseSignalPayload(text) }))
-      } else {
-        const text = await fetchFromWalrus(blobId)
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: parseSignalPayload(text) }))
-      }
-    } catch (e) {
-      if (e instanceof NoAccessError) {
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: { reasoning: "Access denied — payment may not be confirmed yet. Try again in a moment." } }))
-      } else {
-        const msg = e instanceof Error ? e.message : String(e)
-        setRevealedReasoning(prev => ({ ...prev, [blobId]: { reasoning: `Error: ${msg.slice(0, 80)}` } }))
-      }
-    } finally {
-      setUnlocking(null)
-    }
-  }
-
-  // Convert a PositionMinted → ActiveTrade shape for CopyModal
   function toActiveTrade(pos: PositionMinted) {
     const profile = profileMap.get(pos.trader)
     const expiryMinutes = Math.max(1, Math.round((pos.expiry - Date.now()) / 60_000))
@@ -227,10 +122,8 @@ export default function FeedPage() {
 
       <div className="container pt-4 pb-20">
         <section className="my-8">
-          {/* Live BTC Price Ticker */}
           <BtcTicker />
 
-          {/* Title */}
           <div className="flex items-start justify-between mb-8 gap-4 flex-wrap mt-8">
             <div>
               <h1 className="text-black dark:text-white mb-2 text-3xl md:text-4xl lg:text-5xl font-medium leading-tight">
@@ -251,7 +144,6 @@ export default function FeedPage() {
             </button>
           </div>
 
-          {/* Loading */}
           {isLoading && (
             <div className="card p-12 text-center shadow-md">
               <Loader2 className="w-8 h-8 animate-spin text-[#7A7FEE] mx-auto mb-3" />
@@ -259,7 +151,6 @@ export default function FeedPage() {
             </div>
           )}
 
-          {/* Open positions */}
           {!isLoading && (
             <>
               {live.length === 0 && (
@@ -275,17 +166,18 @@ export default function FeedPage() {
                     const name = profile?.display_name ?? shortAddr(pos.trader)
                     const initials = (profile?.display_name ?? pos.trader.slice(2, 4)).slice(0, 2).toUpperCase()
                     const prob = impliedProb(pos.ask_price)
-                    const expired = pos.expiry <= Date.now()
+                    const isExpired = pos.expiry <= Date.now()
                     const isOwn = pos.trader.toLowerCase() === account?.address?.toLowerCase()
-                    const signalForBadge = getSignalMeta(pos.digest)
-                    const revealedForBadge = signalForBadge?.blobId ? revealedReasoning[signalForBadge.blobId] : undefined
-                    const isDirectionLocked = !!signalForBadge?.isPremium && !revealedForBadge && !isOwn
 
                     return (
-                      <div key={pos.digest + i} className="card p-5 shadow-md hover:shadow-lg transition-shadow duration-200 flex flex-col gap-4">
+                      <div
+                        key={pos.digest + i}
+                        className="card p-5 shadow-md hover:shadow-lg transition-shadow duration-200 flex flex-col gap-4 cursor-pointer"
+                        onClick={() => router.push(`/trade/${pos.digest}`)}
+                      >
                         {/* Predictor row */}
                         <div className="flex items-center justify-between">
-                          <Link href={`/predictor/${pos.trader}`} className="flex items-center gap-2.5 group">
+                          <Link href={`/predictor/${pos.trader}`} className="flex items-center gap-2.5 group" onClick={e => e.stopPropagation()}>
                             <div className="w-8 h-8 rounded-full bg-[#7A7FEE] flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
                               {initials}
                             </div>
@@ -294,11 +186,9 @@ export default function FeedPage() {
                               <p className="text-xs text-gray-400">{timeAgo(pos.checkpoint_timestamp_ms)}</p>
                             </div>
                           </Link>
-                          {isDirectionLocked ? (
-                            <span className="text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 bg-purple-500/10 text-purple-500 border border-purple-500/20">
-                              <Lock className="w-3 h-3" /> Premium
-                            </span>
-                          ) : (
+
+                          {/* Direction: visible only to the poster */}
+                          {isOwn ? (
                             <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 ${
                               pos.is_up
                                 ? "bg-green-500/10 text-green-500 border border-green-500/20"
@@ -307,6 +197,10 @@ export default function FeedPage() {
                               <CoinLogo symbol="BTC" size={13} />
                               {pos.is_up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
                               {pos.is_up ? "UP" : "DOWN"}
+                            </span>
+                          ) : (
+                            <span className="text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 text-gray-400 border border-gray-200 dark:border-gray-700">
+                              <Lock className="w-3 h-3" /> Hidden
                             </span>
                           )}
                         </div>
@@ -319,7 +213,7 @@ export default function FeedPage() {
                           </div>
                           <div className="flex justify-between text-xs">
                             <span className="text-gray-500">Expires</span>
-                            <span className={`font-medium ${expired ? "text-red-500" : "text-[#f59e0b]"}`}>{formatExpiry(pos.expiry)}</span>
+                            <span className={`font-medium ${isExpired ? "text-red-500" : "text-[#f59e0b]"}`}>{formatExpiry(pos.expiry)}</span>
                           </div>
                           <div className="flex justify-between text-xs">
                             <span className="text-gray-500">Size</span>
@@ -331,7 +225,7 @@ export default function FeedPage() {
                           </div>
                         </div>
 
-                        {/* Probability bar */}
+                        {/* Probability bar — direction-neutral colour for others */}
                         <div>
                           <div className="flex justify-between text-xs mb-1">
                             <span className="text-gray-500">Implied probability</span>
@@ -339,72 +233,71 @@ export default function FeedPage() {
                           </div>
                           <div className="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${pos.is_up ? "bg-green-500" : "bg-red-500"}`}
+                              className={`h-full rounded-full transition-all ${
+                                isOwn
+                                  ? pos.is_up ? "bg-green-500" : "bg-red-500"
+                                  : "bg-[#7A7FEE]"
+                              }`}
                               style={{ width: `${prob}%` }}
                             />
                           </div>
                         </div>
 
-                        {/* SEAL Premium / Reasoning section */}
-                        {(() => {
-                          const signal = getSignalMeta(pos.digest)
-                          if (!signal) return null
-                          const revealed = signal.blobId ? revealedReasoning[signal.blobId] : undefined
-                          const isOwn = pos.trader.toLowerCase() === account?.address?.toLowerCase()
-                          const isLocked = signal.isPremium && !revealed && !isOwn
+                        {/* Predictor trust stats */}
+                        {profile && (() => {
+                          const winRate = Math.round(Number(profile.win_rate_bps) / 100)
+                          const streak = Number(profile.current_streak)
+                          const bestStreak = Number(profile.best_streak)
+                          const totalTrades = Number(profile.total_trades)
+                          const followers = Number(profile.follower_count)
+                          const winColor = winRate >= 60 ? "text-green-500" : winRate >= 45 ? "text-yellow-500" : "text-red-400"
 
-                          if (isLocked && signal.policyObjectId) {
-                            return (
-                              <button
-                                onClick={() => handleUnlock(signal.policyObjectId!, pos.trader, signal.blobId!, signal.sealId, signal.feeDusd ?? "0.5")}
-                                disabled={unlocking === signal.policyObjectId}
-                                className="w-full flex items-center justify-center gap-2 text-sm py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-semibold transition-colors disabled:opacity-50"
-                              >
-                                {unlocking === signal.policyObjectId
-                                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Unlocking…</>
-                                  : <><Lock className="w-4 h-4" /> Unlock trade · {signal.feeDusd} dUSDC</>}
-                              </button>
-                            )
-                          }
-                          if (revealed) {
-                            return (
-                              <div className="rounded-lg bg-purple-500/5 border border-purple-500/20 px-3 py-2.5 space-y-2">
-                                <span className="text-[10px] text-purple-400 flex items-center gap-1"><Unlock className="w-2.5 h-2.5" /> Unlocked Signal</span>
-                                {revealed.direction && (
-                                  <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${
-                                    revealed.direction === "UP"
-                                      ? "bg-green-500/10 text-green-500"
-                                      : "bg-red-500/10 text-red-500"
-                                  }`}>
-                                    {revealed.direction === "UP" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                    BTC {revealed.direction}
-                                  </span>
-                                )}
-                                <p className="text-xs text-gray-700 dark:text-gray-300 italic">&ldquo;{revealed.reasoning}&rdquo;</p>
-                              </div>
-                            )
-                          }
-                          if (!signal.isPremium && signal.blobId && !revealed) {
-                            return (
-                              <button
-                                onClick={() => handleReveal(signal.blobId!)}
-                                className="w-full text-xs py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 hover:text-[#7A7FEE] hover:border-[#7A7FEE] transition-colors"
-                              >
-                                View reasoning
-                              </button>
-                            )
-                          }
-                          return null
+                          return (
+                            <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-[#161616] p-3">
+                              <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-2.5">Predictor Stats</p>
+
+                              {totalTrades === 0 ? (
+                                <p className="text-xs text-gray-400 text-center py-1 italic">New predictor · no settled trades yet</p>
+                              ) : (
+                                <div className="grid grid-cols-4 gap-2 text-center">
+                                  <div>
+                                    <p className={`text-sm font-bold leading-tight ${winColor}`}>{winRate}%</p>
+                                    <p className="text-[10px] text-gray-400 mt-0.5">Win Rate</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-bold leading-tight text-orange-400">
+                                      {streak > 0 ? `🔥 ${streak}` : "0"}
+                                    </p>
+                                    <p className="text-[10px] text-gray-400 mt-0.5">Streak</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-bold leading-tight text-[#7A7FEE]">{bestStreak}</p>
+                                    <p className="text-[10px] text-gray-400 mt-0.5">Best</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-bold leading-tight text-black dark:text-white">{totalTrades}</p>
+                                    <p className="text-[10px] text-gray-400 mt-0.5">Trades</p>
+                                  </div>
+                                </div>
+                              )}
+
+                              {followers > 0 && (
+                                <p className="text-[10px] text-gray-400 mt-2 pt-2 border-t border-gray-100 dark:border-gray-800 text-center">
+                                  {followers} {followers === 1 ? "follower" : "followers"}
+                                </p>
+                              )}
+                            </div>
+                          )
                         })()}
 
-                        {/* Copy button — always shown to followers (direction is on-chain public data) */}
+                        {/* Action */}
                         {isOwn ? (
                           <div className="w-full py-2 text-center text-xs text-gray-400 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
-                            Your trade
+                            Your trade · tap for details
                           </div>
                         ) : (
                           <button
-                            onClick={() => setCopyTarget(pos)}
+                            onClick={e => { e.stopPropagation(); setCopyTarget(pos) }}
                             className="btn-primary w-full text-sm flex items-center justify-center gap-2"
                           >
                             <Copy className="w-3.5 h-3.5" /> Copy Trade
@@ -417,7 +310,7 @@ export default function FeedPage() {
               )}
 
               {/* Recently expired */}
-              {expired.length > 0 && (
+              {recentExpired.length > 0 && (
                 <>
                   <h2 className="text-black dark:text-white mb-4 text-2xl font-medium">
                     Recently <span className="text-gray-400">Expired</span>
@@ -433,7 +326,7 @@ export default function FeedPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {expired.map((pos, i) => {
+                          {recentExpired.map((pos, i) => {
                             const profile = profileMap.get(pos.trader)
                             const name = profile?.display_name ?? shortAddr(pos.trader)
                             const initials = (profile?.display_name ?? pos.trader.slice(2, 4)).slice(0, 2).toUpperCase()

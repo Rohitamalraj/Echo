@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { X, TrendingUp, TrendingDown, Shield, Loader2, Zap } from "lucide-react"
+import { X, TrendingUp, TrendingDown, Shield, Loader2, Zap, Lock } from "lucide-react"
 import CoinLogo from "@/components/echo/coin-logo"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { buildCreateCopyTx, buildCreateManagerTx, suiClient } from "@/lib/sui-client"
@@ -122,6 +122,13 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
             </div>
             <p className="text-lg font-semibold text-black dark:text-white">Copy Trade Submitted!</p>
             <p className="text-sm text-gray-500 dark:text-gray-400">Your position is live on Sui testnet.</p>
+            {/* Direction revealed after paying/copying */}
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold ${dirBadge[trade.direction]}`}>
+              {trade.direction === "UP"
+                ? <TrendingUp className="w-4 h-4" />
+                : <TrendingDown className="w-4 h-4" />}
+              BTC {trade.direction} · {dirLabel[trade.direction]} ${trade.strike.toLocaleString()}
+            </div>
             {txDigest && (
               <a href={`https://suiscan.xyz/testnet/tx/${txDigest}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#7A7FEE] hover:underline">
                 View on Suiscan →
@@ -151,9 +158,8 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
                     <p className="text-xs text-gray-500 dark:text-gray-400">{winRate}% win · {streak}🔥 streak</p>
                   </div>
                 </div>
-                <span className={`text-xs px-2 py-1 rounded-md font-bold ${dirBadge[trade.direction]}`}>
-                  {trade.direction === "UP" ? <TrendingUp className="w-3 h-3 inline mr-1" /> : <TrendingDown className="w-3 h-3 inline mr-1" />}
-                  {trade.direction}
+                <span className="text-xs px-2 py-1 rounded-md font-bold bg-gray-100 dark:bg-gray-800 text-gray-400 border border-gray-200 dark:border-gray-700 flex items-center gap-1">
+                  <Lock className="w-3 h-3" /> Hidden
                 </span>
               </div>
 
@@ -161,9 +167,9 @@ export default function CopyModal({ trade, open, onOpenChange }: CopyModalProps)
               <div className="bg-gray-50 dark:bg-[#1a1a1a] rounded-xl p-4 space-y-3">
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500 dark:text-gray-400">Prediction</span>
-                  <span className={`font-semibold flex items-center gap-1 ${dirColor[trade.direction]}`}>
+                  <span className="font-semibold flex items-center gap-1.5 text-gray-400">
                     <CoinLogo symbol="BTC" size={14} />
-                    {dirLabel[trade.direction]} ${trade.strike.toLocaleString()}
+                    BTC <Lock className="w-3 h-3" /> ${trade.strike.toLocaleString()}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
