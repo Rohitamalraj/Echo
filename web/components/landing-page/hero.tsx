@@ -20,10 +20,8 @@ export default function Hero() {
             <span className="block text-[#7A7FEE]">Copy the Best.</span>
           </h1>
 
-          <p className="mt-6 mb-8 text-sm md:text-base max-w-md text-gray-600 dark:text-gray-300 leading-relaxed">
-            Echo puts a social copy-trading layer on DeepBook Predict. Follow verified on-chain predictors,
-            copy their calls in one tap — the <strong className="text-black dark:text-white">85/15 payout split</strong> is
-            enforced by smart contract. No middleman. No trust required.
+          <p className="mt-5 mb-8 text-base md:text-lg text-gray-500 dark:text-gray-400">
+            Follow top predictors. Copy in one tap. Earn automatically.
           </p>
 
           <div className="flex flex-wrap items-center gap-3">
