@@ -250,6 +250,40 @@ All trade reasoning — SEAL-encrypted premium signals and free plain-text reaso
 
 ---
 
+## Repository Structure
+
+```
+Echo/
+├── contracts/                        # Sui Move smart contracts
+│   └── sources/
+│       ├── predictor_profile.move    # PredictorProfile, ProfileRegistry, on-chain stats
+│       ├── copy_trade.move           # CopyRecord, create_copy, settle_copy (85/15 split)
+│       └── seal_signal.move          # SignalPolicy, pay_signal_fee, seal_approve
+│
+└── web/                              # Next.js 15 frontend
+    ├── app/
+    │   ├── page.tsx                  # Landing page
+    │   ├── feed/page.tsx             # Live trade feed (copy buttons, predictor stats)
+    │   ├── leaderboard/page.tsx      # Top predictors ranked by win rate
+    │   ├── portfolio/page.tsx        # Your trades, copy history, P&L
+    │   ├── predictor/[address]/      # Public predictor profile page
+    │   ├── start/page.tsx            # Onboarding — create PredictorProfile
+    │   └── trade/[digest]/page.tsx   # Trade detail: TradingView chart + SEAL unlock
+    ├── components/echo/
+    │   ├── copy-modal.tsx            # Copy trade flow (direction hidden pre-copy)
+    │   ├── post-trade-modal.tsx      # Post trade + optional SEAL signal attachment
+    │   ├── create-profile-modal.tsx  # On-chain profile creation
+    │   └── tradingview-chart.tsx     # TradingView Advanced Chart widget
+    └── lib/
+        ├── sui-client.ts             # PTB builders (copy, settle, manager, profile)
+        ├── predict-api.ts            # DeepBook Predict Server REST client
+        ├── seal.ts                   # SEAL encrypt/decrypt helpers
+        ├── walrus.ts                 # Walrus blob upload/fetch
+        └── constants.ts             # Contract addresses, dUSDC type, API URLs
+```
+
+---
+
 ## Running Locally
 
 ```bash
