@@ -334,6 +334,7 @@ export default function TradePage() {
                 symbol="BINANCE:BTCUSDT"
                 interval={pos.expiry - pos.checkpoint_timestamp_ms > 3_600_000 ? "15" : "1"}
                 height={480}
+                strikePrice={pos.strike / 1e9}
               />
 
               {/* Strike reference */}

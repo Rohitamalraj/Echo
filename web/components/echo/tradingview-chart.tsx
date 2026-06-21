@@ -4,7 +4,17 @@ import { useEffect, useId } from "react"
 
 declare global {
   interface Window {
-    TradingView: { widget: new (config: object) => void }
+    TradingView: { widget: new (config: object) => WidgetInstance }
+  }
+}
+
+interface WidgetInstance {
+  onChartReady: (cb: () => void) => void
+  chart: () => {
+    createShape: (
+      point: { price: number },
+      opts: object
+    ) => void
   }
 }
 
@@ -12,12 +22,14 @@ interface Props {
   symbol?: string
   interval?: string
   height?: number
+  strikePrice?: number
 }
 
 export default function TradingViewChart({
   symbol = "BINANCE:BTCUSDT",
   interval = "5",
   height = 480,
+  strikePrice,
 }: Props) {
   const rawId = useId()
   // useId produces ":r0:" style strings — sanitise for DOM id
@@ -29,7 +41,7 @@ export default function TradingViewChart({
       const el = document.getElementById(containerId)
       if (!el) return
       el.innerHTML = ""
-      new window.TradingView.widget({
+      const widget = new window.TradingView.widget({
         autosize: true,
         symbol,
         interval,
@@ -49,6 +61,33 @@ export default function TradingViewChart({
           "paneProperties.backgroundType": "solid",
         },
       })
+
+      if (strikePrice && widget?.onChartReady) {
+        widget.onChartReady(() => {
+          try {
+            widget.chart().createShape(
+              { price: strikePrice },
+              {
+                shape: "horizontal_line",
+                lock: true,
+                disableSelection: true,
+                disableSave: true,
+                overrides: {
+                  linecolor: "#f59e0b",
+                  linewidth: 1,
+                  linestyle: 1,
+                  showLabel: true,
+                  text: `Strike  $${strikePrice.toLocaleString("en-US", { maximumFractionDigits: 0 })}`,
+                  textcolor: "#f59e0b",
+                  fontsize: 11,
+                },
+              }
+            )
+          } catch {
+            // widget version may not support createShape — silently ignore
+          }
+        })
+      }
     }
 
     const scriptId = "tv-widget-script"
@@ -70,7 +109,7 @@ export default function TradingViewChart({
       const el = document.getElementById(containerId)
       if (el) el.innerHTML = ""
     }
-  }, [symbol, interval, containerId])
+  }, [symbol, interval, containerId, strikePrice])
 
   return (
     <div

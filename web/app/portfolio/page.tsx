@@ -125,6 +125,7 @@ export default function PortfolioPage() {
   const [withdrawing, setWithdrawing] = useState(false)
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [withdrawSuccess, setWithdrawSuccess] = useState(false)
+  const [withdrawAmount, setWithdrawAmount] = useState("")
 
   // ── queries ──
 
@@ -329,21 +330,24 @@ export default function PortfolioPage() {
     }
   }
 
-  async function handleWithdrawAll() {
+  async function handleWithdraw() {
     if (!account || !managerData || !managerSummary) return
-    const balance = managerSummary.trading_balance
-    if (balance <= 0) return
+    const parsed = parseFloat(withdrawAmount)
+    if (!parsed || parsed <= 0) return
+    const rawAmount = BigInt(Math.floor(parsed * Math.pow(10, DUSDC_DECIMALS)))
+    if (rawAmount > BigInt(managerSummary.trading_balance)) return
     setWithdrawing(true)
     setWithdrawError(null)
     setWithdrawSuccess(false)
     try {
       const tx = buildWithdrawFromManagerTx({
         managerObjectId: managerData.manager_id,
-        amount: BigInt(balance),
+        amount: rawAmount,
         walletAddress: account.address,
       })
       await signAndExecute({ transaction: tx })
       setWithdrawSuccess(true)
+      setWithdrawAmount("")
       queryClient.invalidateQueries({ queryKey: ["manager-summary"] })
       queryClient.invalidateQueries({ queryKey: ["manager-positions"] })
     } catch (e) {
@@ -660,29 +664,46 @@ export default function PortfolioPage() {
             {/* ── Withdraw banner ── */}
             {liveBalance > 0 && (
               <div className="card p-5 shadow-md mb-8 border border-[#7A7FEE]/20">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className="w-10 h-10 rounded-full bg-[#7A7FEE]/10 flex items-center justify-center flex-shrink-0">
-                      <DollarSign className="w-5 h-5 text-[#7A7FEE]" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-black dark:text-white">
-                        Manager Balance: <span className="text-[#7A7FEE]">{fDusd(liveBalance)} dUSDC</span>
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Winnings + unspent deposits — withdraw to your Sui wallet.
-                      </p>
-                    </div>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-9 h-9 rounded-full bg-[#7A7FEE]/10 flex items-center justify-center flex-shrink-0">
+                    <DollarSign className="w-4 h-4 text-[#7A7FEE]" />
                   </div>
-                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                    <button onClick={handleWithdrawAll} disabled={withdrawing}
-                      className="text-sm px-4 py-2 rounded-lg bg-[#7A7FEE] text-white font-semibold hover:bg-[#6a6fde] transition-colors disabled:opacity-50 flex items-center gap-2">
-                      {withdrawing ? <><Loader2 className="w-4 h-4 animate-spin" /> Withdrawing…</> : "Withdraw All"}
-                    </button>
-                    {withdrawSuccess && <p className="text-xs text-green-500">Withdrawn! Check your wallet.</p>}
-                    {withdrawError && <p className="text-xs text-red-400 max-w-xs text-right">{withdrawError}</p>}
+                  <div>
+                    <p className="text-sm font-semibold text-black dark:text-white">
+                      Manager Balance: <span className="text-[#7A7FEE]">{fDusd(liveBalance)} dUSDC</span>
+                    </p>
+                    <p className="text-xs text-gray-400 mt-0.5">Winnings + unspent deposits — withdraw to your Sui wallet.</p>
                   </div>
                 </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      value={withdrawAmount}
+                      onChange={e => setWithdrawAmount(e.target.value)}
+                      placeholder="0.00"
+                      min="0"
+                      max={fDusd(liveBalance)}
+                      step="0.01"
+                      className="w-full pl-4 pr-16 py-2.5 bg-gray-100 dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-semibold text-black dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7A7FEE] transition-all"
+                    />
+                    <button
+                      onClick={() => setWithdrawAmount(fDusd(liveBalance))}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#7A7FEE] font-semibold hover:underline"
+                    >
+                      Max
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleWithdraw}
+                    disabled={withdrawing || !withdrawAmount || parseFloat(withdrawAmount) <= 0}
+                    className="px-5 py-2.5 rounded-lg bg-[#7A7FEE] text-white text-sm font-semibold hover:bg-[#6a6fde] transition-colors disabled:opacity-50 flex items-center gap-2 flex-shrink-0"
+                  >
+                    {withdrawing ? <><Loader2 className="w-4 h-4 animate-spin" /> Withdrawing…</> : "Withdraw"}
+                  </button>
+                </div>
+                {withdrawSuccess && <p className="text-xs text-green-500 mt-2">Withdrawn! Check your wallet.</p>}
+                {withdrawError && <p className="text-xs text-red-400 mt-2">{withdrawError}</p>}
               </div>
             )}
 
