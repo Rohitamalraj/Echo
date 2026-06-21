@@ -1,49 +1,74 @@
-import { BarChart2, Copy, Zap } from "lucide-react"
+import { BarChart2, Copy, Zap, ShieldCheck } from "lucide-react"
 
-const services = [
+const steps = [
   {
-    id: 1,
+    number: "01",
     title: "Post a Trade",
-    description: "Browse DeepBook Predict markets, pick a direction, add your reasoning. Your on-chain profile tracks every result automatically.",
+    description:
+      "Open a BTC UP or DOWN position on DeepBook Predict. Your on-chain Echo profile records every result — win rate, streak, earnings — automatically.",
     icon: BarChart2,
-    color: "bg-[#7A7FEE]",
+    highlight: "Your track record lives on Sui. Immutable.",
   },
   {
-    id: 2,
+    number: "02",
     title: "Copy Instantly",
-    description: "One tap mirrors a verified predictor's open position at the same strike and expiry. No options knowledge required.",
+    description:
+      "Find a predictor with a verified track record, tap Copy Trade, enter your amount. One transaction mirrors their position at the same strike and expiry.",
     icon: Copy,
-    color: "bg-[#7A7FEE]",
+    highlight: "Same position. Same oracle. Same rules.",
   },
   {
-    id: 3,
+    number: "03",
     title: "Earn Automatically",
-    description: "When you win, the smart contract routes 85% to your wallet and 15% to your predictor in the same settlement transaction.",
+    description:
+      "When your copy trade wins, the smart contract settles and routes 85% to you and 15% to your predictor in a single transaction. Zero manual steps.",
     icon: Zap,
-    color: "bg-[#7A7FEE]",
+    highlight: "85% yours. Always. By contract.",
+  },
+  {
+    number: "04",
+    title: "Trust the Contract",
+    description:
+      "No admin key. No fee changes. The payout ratio is hardcoded in a Move smart contract deployed on Sui Testnet. Anyone can verify it on-chain.",
+    icon: ShieldCheck,
+    highlight: "Verify it yourself on Sui Explorer.",
   },
 ]
 
 export default function Services() {
   return (
     <section id="services" className="my-20">
-      <h2 className="text-black dark:text-white mb-6 text-3xl md:text-4xl lg:text-5xl font-medium leading-tight">
-        How Echo
-        <span className="block text-[#7A7FEE] dark:text-[#7A7FEE]">Works</span>
-      </h2>
-      <p className="mb-12 max-w-2xl text-gray-700 dark:text-gray-300">
-        Echo puts a social copy-trading layer on top of DeepBook Predict — Sui's on-chain binary prediction market.
-        Three steps, zero trust required.
-      </p>
+      <div className="mb-12">
+        <h2 className="text-black dark:text-white text-3xl md:text-4xl lg:text-5xl font-medium leading-tight">
+          How Echo
+          <span className="block text-[#7A7FEE]">Works</span>
+        </h2>
+        <p className="mt-4 max-w-2xl text-gray-600 dark:text-gray-300">
+          A social copy-trading layer on top of DeepBook Predict — Sui&apos;s native binary prediction market.
+          Four steps, zero trust required.
+        </p>
+      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {services.map((service) => (
-          <div key={service.id} className="card p-6 shadow-md hover:shadow-lg transition-shadow duration-300">
-            <div className={`${service.color} w-12 h-12 rounded-full flex items-center justify-center mb-4 shadow-sm`}>
-              <service.icon className="w-6 h-6 text-white" />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        {steps.map((step) => (
+          <div key={step.number} className="card p-6 shadow-md hover:shadow-lg transition-shadow group">
+            <div className="flex items-start gap-4">
+              <span className="text-4xl font-black text-[#7A7FEE]/15 dark:text-[#7A7FEE]/20 leading-none flex-shrink-0 select-none">
+                {step.number}
+              </span>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-[#7A7FEE]/10 flex items-center justify-center flex-shrink-0">
+                    <step.icon className="w-4 h-4 text-[#7A7FEE]" />
+                  </div>
+                  <h3 className="text-base font-semibold text-black dark:text-white">{step.title}</h3>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-3 leading-relaxed">
+                  {step.description}
+                </p>
+                <p className="text-xs font-semibold text-[#7A7FEE]">{step.highlight}</p>
+              </div>
             </div>
-            <h3 className="text-xl font-semibold mb-2 text-black dark:text-white">{service.title}</h3>
-            <p className="text-gray-700 dark:text-gray-300">{service.description}</p>
           </div>
         ))}
       </div>
